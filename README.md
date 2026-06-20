@@ -1,6 +1,6 @@
 # LaPage Codex Telegram Bridge
 
-Run a persistent Codex CLI session behind a private Telegram bot. Telegram messages are written into a pseudo-terminal-backed Codex session, and Codex terminal output is sent back to Telegram in chunks.
+Run a persistent Codex CLI session behind a private Telegram bot. Telegram messages are written into a detached tmux-backed Codex session, and Codex terminal output is sent back to Telegram in chunks.
 
 ## Setup
 
@@ -10,6 +10,12 @@ Run a persistent Codex CLI session behind a private Telegram bot. Telegram messa
 
    ```sh
    npm install
+   ```
+
+   Also make sure `tmux` is installed:
+
+   ```sh
+   tmux -V
    ```
 
 4. Create your local config:
@@ -47,8 +53,23 @@ Run a persistent Codex CLI session behind a private Telegram bot. Telegram messa
 - `CODEX_CWD` controls where Codex starts.
 - `CODEX_COMMAND` defaults to `codex`.
 - `CODEX_ARGS` can pass extra startup args to Codex, for example `--approval-policy never` if supported by your installed CLI.
+- `CODEX_SUBMIT_KEY` controls which key submits a Telegram prompt to Codex. It defaults to `Enter`.
+- `CODEX_SUBMIT_DELAY_MS` waits after pasting text before pressing submit. It defaults to `800` because Codex needs a short delay after tmux paste.
+- `TMUX_SESSION` controls the detached tmux session name.
+- `POLL_INTERVAL_MS` controls how often the bridge reads new tmux output.
+- `CODEX_STARTUP_DELAY_MS` gives Codex time to initialize before the first Telegram prompt is pasted.
 - `MAX_TELEGRAM_CHARS` defaults to `3500` and is capped below Telegram's message limit.
-- The bridge uses macOS `script(1)` to provide the pseudo-terminal Codex expects.
+- The bridge uses `tmux` to provide the pseudo-terminal Codex expects.
+
+## Tmux Debugging
+
+Attach to the live Codex session from a terminal:
+
+```sh
+tmux attach -t codex-telegram-bridge
+```
+
+Detach without stopping Codex by pressing `Ctrl-b`, then `d`.
 
 ## Security
 
