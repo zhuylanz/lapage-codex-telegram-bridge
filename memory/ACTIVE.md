@@ -1,6 +1,6 @@
 # Active Session Handoff
 
-Updated: 2026-06-20 21:20 Asia/Ho_Chi_Minh
+Updated: 2026-06-21 00:40 Asia/Ho_Chi_Minh
 
 ## Current Goal
 - Build a Telegram chat bridge to a persistent Codex CLI PTY session.
@@ -43,6 +43,15 @@ Updated: 2026-06-20 21:20 Asia/Ho_Chi_Minh
 - Streaming parser test: partial response returns answer text while `isCodexWorking=true`; completed response returns final answer; progress bullet is excluded.
 - Fast-stream smoke test: bridge stayed up for 8 seconds after adding `STREAM_EDIT_INTERVAL_MS`, `STREAM_MIN_CHANGE_CHARS`, and `TYPING_INTERVAL_MS`.
 - Full-response parser test: tool/action output after latest prompt is preserved, e.g. explanation bullet, `Ran rm`, `(no output)`, and final deletion bullet.
+- User preference: do not commit code unless explicitly asked.
+- Updated default/local `CODEX_ARGS` to `--search --yolo`; typecheck/build passed. These changes are intentionally uncommitted.
+- Improved Telegram formatting: no more code-block-only output, soft terminal wraps are joined, command runs are marked with `🔧 Ran`, command output is italic/muted, and bullet lists are more readable. Typecheck/build passed. Changes are intentionally uncommitted.
+- Thinking/tool/status lines now render as Telegram blockquotes with icons, e.g. `> 🧠 ...` and `> 🔧 ...`; typecheck/build passed. Changes are intentionally uncommitted.
+- User changed direction: send each newly completed rendered line as its own Telegram message instead of editing one combined stream message. Thinking/tool lines are separate quoted messages. To avoid half-written text, the bridge sends all but the current last line while Codex is working, then sends remaining lines on final completion. Typecheck/build passed. Changes are intentionally uncommitted.
+- Fixed duplicate/flood issue in line-by-line mode: removed legacy full-buffer auto flush from normal polling, reset line count only on shrinking response, dedupe new lines within a poll, added queued Telegram sends with ~350ms pacing, and retry-after handling for 429. Typecheck/build passed. Changes are intentionally uncommitted.
+- Reverted line-by-line Telegram messages back to previous single edited-message stream because line-by-line caused duplicates/flooding. Kept formatting improvements. Verified typecheck/build. Changes are intentionally uncommitted.
+- tmux `capture-pane -e` exposes ANSI style metadata; muted Codex text appears with SGR dim (`\x1b[2m`) and tool labels with bold (`\x1b[1m`). Future formatter should parse these style spans instead of relying on keyword heuristics.
+- Reverted `tmux capture-pane -e` back to plain capture because escaped capture polluted response extraction with raw `[0m`/`[2m` footer fragments and caused missing/garbled Telegram output. Full response extraction is restored; Codex `Worked for...` footer is filtered. Typecheck/build passed. Changes are intentionally uncommitted.
 
 ## Decisions Made
 - Use Node.js with `grammy` and `tmux` for a persistent interactive Codex session.
@@ -54,6 +63,7 @@ Updated: 2026-06-20 21:20 Asia/Ho_Chi_Minh
 - Do not send Codex progress snapshots repeatedly; wait for a completed `• ...` response block.
 - For streaming, edit the same Telegram message every ~1.5s instead of sending multiple messages.
 - Current faster-stream defaults: `STREAM_EDIT_INTERVAL_MS=650`, `STREAM_MIN_CHANGE_CHARS=24`, `TYPING_INTERVAL_MS=4000`.
+- Do not run `git commit` proactively; wait for explicit user request.
 
 ## Next Safe Step
 - Run `npm run dev`, open Telegram chat with `@groot_agent_bot`, send `/status`, then send a Codex prompt. Current tested values are `CODEX_SUBMIT_KEY=Enter` and `CODEX_SUBMIT_DELAY_MS=800`.

@@ -52,7 +52,7 @@ Run a persistent Codex CLI session behind a private Telegram bot. Telegram messa
 - `TELEGRAM_ALLOWED_USER_IDS` is a comma-separated allowlist. Keep this private.
 - `CODEX_CWD` controls where Codex starts.
 - `CODEX_COMMAND` defaults to `codex`.
-- `CODEX_ARGS` can pass extra startup args to Codex, for example `--approval-policy never` if supported by your installed CLI.
+- `CODEX_ARGS` can pass extra startup args to Codex. It defaults to `--search --yolo` for this bridge.
 - `CODEX_SUBMIT_KEY` controls which key submits a Telegram prompt to Codex. It defaults to `Enter`.
 - `CODEX_SUBMIT_DELAY_MS` waits after pasting text before pressing submit. It defaults to `800` because Codex needs a short delay after tmux paste.
 - `TMUX_SESSION` controls the detached tmux session name.

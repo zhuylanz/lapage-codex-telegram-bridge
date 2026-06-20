@@ -1,7 +1,7 @@
 import { Bot, Context } from 'grammy';
 import type { BridgeConfig } from './config.js';
 import { CodexSession } from './codex-session.js';
-import { chunkText, isCodexWorking, latestCodexResponse, latestCompletedCodexResponse, wrapCodeBlock } from './text.js';
+import { chunkText, formatTelegramMarkdown, isCodexWorking, latestCodexResponse, latestCompletedCodexResponse, plainTelegramText } from './text.js';
 
 export class TelegramCodexBridge {
   private readonly bot: Bot;
@@ -18,6 +18,7 @@ export class TelegramCodexBridge {
   private lastStreamText = '';
   private lastStreamEditAt = 0;
   private typingTimer: NodeJS.Timeout | null = null;
+  private sendQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly config: BridgeConfig) {
     this.bot = new Bot(config.token);
@@ -232,7 +233,7 @@ export class TelegramCodexBridge {
     const trimmed = this.outputBuffer.trimEnd();
     if (!trimmed) {
       if (force) {
-        await this.bot.api.sendMessage(this.activeChatId, 'No buffered output.');
+        await this.queueTelegramSend(() => this.bot.api.sendMessage(this.activeChatId!, 'No buffered output.'));
       }
       this.outputBuffer = '';
       return;
@@ -240,7 +241,7 @@ export class TelegramCodexBridge {
 
     this.outputBuffer = '';
     for (const chunk of chunkText(trimmed, this.config.maxTelegramChars)) {
-      await this.bot.api.sendMessage(this.activeChatId, wrapCodeBlock(chunk), { parse_mode: 'MarkdownV2' });
+      await this.sendFormattedMessage(chunk);
     }
   }
 
@@ -260,12 +261,50 @@ export class TelegramCodexBridge {
     }
 
     const [chunk] = chunkText(trimmed, this.config.maxTelegramChars);
-    await this.bot.api.editMessageText(this.activeChatId, this.streamMessageId, wrapCodeBlock(chunk), {
-      parse_mode: 'MarkdownV2',
-    }).catch(() => undefined);
+    await this.editFormattedMessage(chunk);
 
     this.lastStreamText = trimmed;
     this.lastStreamEditAt = now;
+  }
+
+  private async sendFormattedMessage(text: string): Promise<void> {
+    if (!this.activeChatId) {
+      return;
+    }
+
+    const markdown = formatTelegramMarkdown(text);
+    const chatId = this.activeChatId;
+    const sent = await this.queueTelegramSend(() => this.bot.api.sendMessage(chatId, markdown, { parse_mode: 'MarkdownV2' }))
+      .then(() => true)
+      .catch(() => false);
+    if (!sent) {
+      await this.queueTelegramSend(() => this.bot.api.sendMessage(chatId, plainTelegramText(text)));
+    }
+  }
+
+  private async editFormattedMessage(text: string): Promise<void> {
+    if (!this.activeChatId || !this.streamMessageId) {
+      return;
+    }
+
+    const markdown = formatTelegramMarkdown(text);
+    const edited = await this.bot.api.editMessageText(this.activeChatId, this.streamMessageId, markdown, {
+      parse_mode: 'MarkdownV2',
+    }).then(() => true).catch(() => false);
+    if (!edited) {
+      await this.bot.api.editMessageText(this.activeChatId, this.streamMessageId, plainTelegramText(text)).catch(() => undefined);
+    }
+  }
+
+  private queueTelegramSend<T>(operation: () => Promise<T>): Promise<T> {
+    const run = async () => {
+      await sleep(350);
+      return retryTelegramOperation(operation);
+    };
+
+    const next = this.sendQueue.then(run, run);
+    this.sendQueue = next.then(() => undefined, () => undefined);
+    return next;
   }
 
   private isMeaningfulStreamChange(nextText: string, now: number): boolean {
@@ -316,4 +355,36 @@ export class TelegramCodexBridge {
     this.lastStreamEditAt = 0;
     this.stopTypingIndicator();
   }
+}
+
+async function retryTelegramOperation<T>(operation: () => Promise<T>): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    const retryAfter = telegramRetryAfterMs(error);
+    if (retryAfter === null) {
+      throw error;
+    }
+    await sleep(retryAfter);
+    return operation();
+  }
+}
+
+function telegramRetryAfterMs(error: unknown): number | null {
+  const parameters = (error as { parameters?: { retry_after?: number } }).parameters;
+  if (typeof parameters?.retry_after === 'number') {
+    return (parameters.retry_after + 1) * 1000;
+  }
+
+  const description = (error as { description?: string }).description;
+  const match = description?.match(/retry after (\d+)/i);
+  if (match) {
+    return (Number(match[1]) + 1) * 1000;
+  }
+
+  return null;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
