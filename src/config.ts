@@ -38,7 +38,7 @@ export function readConfig(): BridgeConfig {
     codexArgs: parseArgs(process.env.CODEX_ARGS || '--search --yolo'),
     codexSubmitKey: process.env.CODEX_SUBMIT_KEY || 'Enter',
     codexSubmitDelayMs: readNumber('CODEX_SUBMIT_DELAY_MS', 800),
-    codexCwd: process.env.CODEX_CWD || process.cwd(),
+    codexCwd: expandHome(process.env.CODEX_CWD || process.cwd()),
     tmuxSession: process.env.TMUX_SESSION || 'codex-telegram-bridge',
     cols: readNumber('CODEX_COLS', 120),
     rows: readNumber('CODEX_ROWS', 40),
@@ -66,5 +66,17 @@ function requireEnv(name: string): string {
   if (!value) {
     throw new Error(`${name} is required.`);
   }
+  return value;
+}
+
+function expandHome(value: string): string {
+  if (value === '~') {
+    return process.env.HOME || value;
+  }
+
+  if (value.startsWith('~/')) {
+    return `${process.env.HOME || '~'}${value.slice(1)}`;
+  }
+
   return value;
 }

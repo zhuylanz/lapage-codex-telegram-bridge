@@ -1,9 +1,40 @@
 {
+  "name": "@lapage/codex-telegram-bridge",
+  "version": "0.1.0",
+  "description": "Private Telegram bridge for controlling Codex CLI on a home PC or server without opening inbound ports.",
+  "type": "module",
+  "bin": {
+    "codex-telegram-bridge": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/zhuylanz/lapage-codex-telegram-bridge.git"
+  },
+  "homepage": "https://github.com/zhuylanz/lapage-codex-telegram-bridge#readme",
+  "bugs": {
+    "url": "https://github.com/zhuylanz/lapage-codex-telegram-bridge/issues"
+  },
+  "keywords": [
+    "codex",
+    "codex-cli",
+    "telegram",
+    "telegram-bot",
+    "tmux",
+    "remote-control",
+    "agent"
+  ],
+  "license": "MIT",
   "scripts": {
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "start": "node dist/index.js"
+    "start": "node dist/index.js",
+    "prepublishOnly": "npm run typecheck && npm run build"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -14,5 +45,8 @@
     "@types/node": "^22.20.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
