@@ -35,7 +35,7 @@ export function readConfig(): BridgeConfig {
     token,
     allowedUserIds,
     codexCommand: process.env.CODEX_COMMAND || 'codex',
-    codexArgs: parseArgs(process.env.CODEX_ARGS || ''),
+    codexArgs: parseArgs(process.env.CODEX_ARGS || '--search --yolo'),
     codexSubmitKey: process.env.CODEX_SUBMIT_KEY || 'Enter',
     codexSubmitDelayMs: readNumber('CODEX_SUBMIT_DELAY_MS', 800),
     codexCwd: process.env.CODEX_CWD || process.cwd(),
