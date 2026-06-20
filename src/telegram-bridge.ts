@@ -17,6 +17,7 @@ export class TelegramCodexBridge {
   private streamMessageId: number | null = null;
   private lastStreamText = '';
   private lastStreamEditAt = 0;
+  private typingTimer: NodeJS.Timeout | null = null;
 
   constructor(private readonly config: BridgeConfig) {
     this.bot = new Bot(config.token);
@@ -37,6 +38,7 @@ export class TelegramCodexBridge {
 
   async stop(): Promise<void> {
     this.stopPollingOutput();
+    this.stopTypingIndicator();
     await this.codex.stop();
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
@@ -80,6 +82,7 @@ export class TelegramCodexBridge {
     this.streamMessageId = streamMessage.message_id;
     this.lastStreamText = 'Codex is working…';
     this.lastStreamEditAt = Date.now();
+    this.startTypingIndicator();
   }
 
   private async handleCommand(context: Context, text: string): Promise<boolean> {
@@ -102,10 +105,12 @@ export class TelegramCodexBridge {
       case '/restart':
         await this.codex.restart();
         this.resetSnapshots();
+        this.stopTypingIndicator();
         await context.reply('Restarted Codex.');
         return true;
       case '/stop':
         await this.codex.stop();
+        this.stopTypingIndicator();
         await context.reply('Stopped Codex. Send any message to start it again.');
         return true;
       default:
@@ -128,6 +133,33 @@ export class TelegramCodexBridge {
     }
   }
 
+  private startTypingIndicator(): void {
+    if (!this.activeChatId) {
+      return;
+    }
+
+    this.stopTypingIndicator();
+    void this.sendTypingAction();
+    this.typingTimer = setInterval(() => {
+      void this.sendTypingAction();
+    }, this.config.typingIntervalMs);
+  }
+
+  private stopTypingIndicator(): void {
+    if (this.typingTimer) {
+      clearInterval(this.typingTimer);
+      this.typingTimer = null;
+    }
+  }
+
+  private async sendTypingAction(): Promise<void> {
+    if (!this.activeChatId) {
+      return;
+    }
+
+    await this.bot.api.sendChatAction(this.activeChatId, 'typing').catch(() => undefined);
+  }
+
   private async readNewOutput(force = false): Promise<void> {
     if (!this.activeChatId || !await this.codex.exists()) {
       return;
@@ -139,6 +171,9 @@ export class TelegramCodexBridge {
 
     if (this.streamMessageId && response) {
       await this.editStreamMessage(response, !working || force);
+      if (!working || force) {
+        this.stopTypingIndicator();
+      }
     }
 
     if (working && !force) {
@@ -220,7 +255,7 @@ export class TelegramCodexBridge {
     }
 
     const now = Date.now();
-    if (!force && now - this.lastStreamEditAt < 1500) {
+    if (!force && !this.isMeaningfulStreamChange(trimmed, now)) {
       return;
     }
 
@@ -231,6 +266,18 @@ export class TelegramCodexBridge {
 
     this.lastStreamText = trimmed;
     this.lastStreamEditAt = now;
+  }
+
+  private isMeaningfulStreamChange(nextText: string, now: number): boolean {
+    if (now - this.lastStreamEditAt < this.config.streamEditIntervalMs) {
+      return false;
+    }
+
+    if (nextText.length < this.lastStreamText.length) {
+      return true;
+    }
+
+    return nextText.length - this.lastStreamText.length >= this.config.streamMinChangeChars;
   }
 
   private statusText(): string {
@@ -267,5 +314,6 @@ export class TelegramCodexBridge {
     this.streamMessageId = null;
     this.lastStreamText = '';
     this.lastStreamEditAt = 0;
+    this.stopTypingIndicator();
   }
 }
