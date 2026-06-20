@@ -25,16 +25,18 @@ export function latestCompletedCodexResponse(data: string): string | null {
 export function latestCodexResponse(data: string): string | null {
   const lines = paneLines(data);
 
-  const bulletStart = findLastIndex(lines, (line) => {
+  const lastResponseBullet = findLastIndex(lines, (line) => {
     const trimmed = line.trimStart();
     return trimmed.startsWith('• ') && !/^•\s*Working\s*\(/i.test(trimmed);
   });
-  if (bulletStart === -1) {
+  if (lastResponseBullet === -1) {
     return null;
   }
 
+  const promptStart = findLastIndex(lines.slice(0, lastResponseBullet), (line) => isUserPromptLine(line.trim()));
+  const responseStart = promptStart === -1 ? lastResponseBullet : promptStart + 1;
   const response: string[] = [];
-  for (const line of lines.slice(bulletStart)) {
+  for (const line of lines.slice(responseStart)) {
     const trimmed = line.trim();
     if (response.length > 0 && isPromptOrStatusLine(trimmed)) {
       break;
@@ -102,7 +104,11 @@ function paneLines(data: string): string[] {
 }
 
 function isPromptOrStatusLine(trimmed: string): boolean {
-  return trimmed.startsWith('› ') || /^agentic\s+/.test(trimmed) || /^•\s*Working\s*\(/i.test(trimmed);
+  return isUserPromptLine(trimmed) || /^agentic\s+/.test(trimmed) || /^•\s*Working\s*\(/i.test(trimmed);
+}
+
+function isUserPromptLine(trimmed: string): boolean {
+  return trimmed.startsWith('› ');
 }
 
 function isIgnorablePaneLine(trimmed: string): boolean {
