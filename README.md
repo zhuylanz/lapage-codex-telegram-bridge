@@ -29,6 +29,22 @@ tmux -V
 codex --version
 ```
 
+Install `tmux` if it is missing:
+
+```sh
+# macOS
+brew install tmux
+
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y tmux
+
+# Fedora
+sudo dnf install -y tmux
+
+# Arch Linux
+sudo pacman -S tmux
+```
+
 ## Quick Start
 
 Install the package globally:
