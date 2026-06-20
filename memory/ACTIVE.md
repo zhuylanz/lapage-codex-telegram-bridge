@@ -1,13 +1,13 @@
 # Active Session Handoff
 
-Updated: 2026-06-20 21:05 Asia/Ho_Chi_Minh
+Updated: 2026-06-20 21:20 Asia/Ho_Chi_Minh
 
 ## Current Goal
 - Build a Telegram chat bridge to a persistent Codex CLI PTY session.
 
 ## Current State
 - Project folder created at `/Users/huylan/Code/lapage-codex-telegram-bride`.
-- Bridge implementation uses tmux, sends prompts via `tmux set-buffer` + `paste-buffer`, waits `CODEX_SUBMIT_DELAY_MS`, then presses configurable submit key. Output relay streams by editing one Telegram message with the latest Codex response block, sends Telegram typing actions, and throttles edits with configurable thresholds.
+- Bridge implementation uses tmux, sends prompts via `tmux set-buffer` + `paste-buffer`, waits `CODEX_SUBMIT_DELAY_MS`, then presses configurable submit key. Output relay streams by editing one Telegram message with the full latest Codex response block, sends Telegram typing actions, and throttles edits with configurable thresholds.
 
 ## Files Touched
 - `package.json`: npm scripts and dependencies.
@@ -42,6 +42,7 @@ Updated: 2026-06-20 21:05 Asia/Ho_Chi_Minh
 - Fixed parser false positive where normal response text containing “working” was treated as in-progress.
 - Streaming parser test: partial response returns answer text while `isCodexWorking=true`; completed response returns final answer; progress bullet is excluded.
 - Fast-stream smoke test: bridge stayed up for 8 seconds after adding `STREAM_EDIT_INTERVAL_MS`, `STREAM_MIN_CHANGE_CHARS`, and `TYPING_INTERVAL_MS`.
+- Full-response parser test: tool/action output after latest prompt is preserved, e.g. explanation bullet, `Ran rm`, `(no output)`, and final deletion bullet.
 
 ## Decisions Made
 - Use Node.js with `grammy` and `tmux` for a persistent interactive Codex session.
