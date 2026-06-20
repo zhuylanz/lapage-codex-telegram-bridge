@@ -1,13 +1,13 @@
 # Active Session Handoff
 
-Updated: 2026-06-20 20:45 Asia/Ho_Chi_Minh
+Updated: 2026-06-20 21:05 Asia/Ho_Chi_Minh
 
 ## Current Goal
 - Build a Telegram chat bridge to a persistent Codex CLI PTY session.
 
 ## Current State
 - Project folder created at `/Users/huylan/Code/lapage-codex-telegram-bride`.
-- Bridge implementation uses tmux, sends prompts via `tmux set-buffer` + `paste-buffer`, waits `CODEX_SUBMIT_DELAY_MS`, then presses configurable submit key. Output relay now streams by editing one Telegram message with the latest Codex response block.
+- Bridge implementation uses tmux, sends prompts via `tmux set-buffer` + `paste-buffer`, waits `CODEX_SUBMIT_DELAY_MS`, then presses configurable submit key. Output relay streams by editing one Telegram message with the latest Codex response block, sends Telegram typing actions, and throttles edits with configurable thresholds.
 
 ## Files Touched
 - `package.json`: npm scripts and dependencies.
@@ -41,6 +41,7 @@ Updated: 2026-06-20 20:45 Asia/Ho_Chi_Minh
 - Parser test: working/progress pane returns `null`; completed bullet response returns the response only.
 - Fixed parser false positive where normal response text containing “working” was treated as in-progress.
 - Streaming parser test: partial response returns answer text while `isCodexWorking=true`; completed response returns final answer; progress bullet is excluded.
+- Fast-stream smoke test: bridge stayed up for 8 seconds after adding `STREAM_EDIT_INTERVAL_MS`, `STREAM_MIN_CHANGE_CHARS`, and `TYPING_INTERVAL_MS`.
 
 ## Decisions Made
 - Use Node.js with `grammy` and `tmux` for a persistent interactive Codex session.
@@ -51,6 +52,7 @@ Updated: 2026-06-20 20:45 Asia/Ho_Chi_Minh
 - Raw tmux `pipe-pane` output contains noisy TUI diff/control artifacts like repeated `q`; use cleaned `capture-pane` snapshots instead.
 - Do not send Codex progress snapshots repeatedly; wait for a completed `• ...` response block.
 - For streaming, edit the same Telegram message every ~1.5s instead of sending multiple messages.
+- Current faster-stream defaults: `STREAM_EDIT_INTERVAL_MS=650`, `STREAM_MIN_CHANGE_CHARS=24`, `TYPING_INTERVAL_MS=4000`.
 
 ## Next Safe Step
 - Run `npm run dev`, open Telegram chat with `@groot_agent_bot`, send `/status`, then send a Codex prompt. Current tested values are `CODEX_SUBMIT_KEY=Enter` and `CODEX_SUBMIT_DELAY_MS=800`.

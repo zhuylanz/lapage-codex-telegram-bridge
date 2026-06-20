@@ -12,6 +12,9 @@ export type BridgeConfig = {
   flushIntervalMs: number;
   pollIntervalMs: number;
   startupDelayMs: number;
+  streamEditIntervalMs: number;
+  streamMinChangeChars: number;
+  typingIntervalMs: number;
   maxTelegramChars: number;
 };
 
@@ -42,6 +45,9 @@ export function readConfig(): BridgeConfig {
     flushIntervalMs: readNumber('FLUSH_INTERVAL_MS', 1200),
     pollIntervalMs: readNumber('POLL_INTERVAL_MS', 500),
     startupDelayMs: readNumber('CODEX_STARTUP_DELAY_MS', 1500),
+    streamEditIntervalMs: readNumber('STREAM_EDIT_INTERVAL_MS', 650),
+    streamMinChangeChars: readNumber('STREAM_MIN_CHANGE_CHARS', 24),
+    typingIntervalMs: readNumber('TYPING_INTERVAL_MS', 4000),
     maxTelegramChars: Math.min(readNumber('MAX_TELEGRAM_CHARS', 3500), 3900),
   };
 }

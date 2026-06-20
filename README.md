@@ -58,6 +58,9 @@ Run a persistent Codex CLI session behind a private Telegram bot. Telegram messa
 - `TMUX_SESSION` controls the detached tmux session name.
 - `POLL_INTERVAL_MS` controls how often the bridge reads new tmux output.
 - `CODEX_STARTUP_DELAY_MS` gives Codex time to initialize before the first Telegram prompt is pasted.
+- `STREAM_EDIT_INTERVAL_MS` controls how often the bot may edit the streaming Telegram response. It defaults to `650`.
+- `STREAM_MIN_CHANGE_CHARS` avoids tiny no-op edits. It defaults to `24`.
+- `TYPING_INTERVAL_MS` controls how often the bot sends Telegram's typing indicator while Codex is working. It defaults to `4000`.
 - `MAX_TELEGRAM_CHARS` defaults to `3500` and is capped below Telegram's message limit.
 - The bridge uses `tmux` to provide the pseudo-terminal Codex expects.
 
