@@ -70,6 +70,10 @@ codex-telegram-bridge
 
 Open your Telegram bot chat and send `/status`. Any normal message after that is sent to Codex as a prompt.
 
+Each allowed Telegram user gets an isolated Codex app-server process and thread. Different users can work at the same time without sharing session state.
+
+If a user sends another prompt while their Codex turn is still active, the bridge rejects that prompt with a busy message. Send `/interrupt` first if you want to stop the current turn and replace it.
+
 Codex output updates when app-server reports completed items. The bridge keeps a per-turn cache of completed messages, command summaries, and tool summaries, then edits/splits Telegram messages from that cache until the turn completes.
 
 You can also send screenshots, documents, PDFs, videos, audio, or voice notes. The bridge downloads each attachment to `/tmp/codex-telegram-bridge/` with a random filename, includes the local path in the Codex prompt, and attaches images as `localImage` inputs for Codex vision.
@@ -107,12 +111,12 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 
 ## Telegram Commands
 
-- `/status` — show bridge state, stdio transport, working directory, and Codex command.
-- `/flush` — force-read and relay the latest Codex response.
-- `/interrupt` — interrupt the active Codex turn.
-- `/restart` — restart Codex app-server.
-- `/stop` — stop Codex app-server.
-- Any other text is sent directly to Codex as a prompt.
+- `/status` — show your bridge state, stdio transport, working directory, and Codex command.
+- `/flush` — force-render your completed Codex output.
+- `/interrupt` — interrupt your active Codex turn.
+- `/restart` — restart your Codex app-server session.
+- `/stop` — stop your Codex app-server session.
+- Any other text or attachment is sent directly to Codex as a prompt.
 
 ## Running as a Background Service
 
