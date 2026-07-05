@@ -11,54 +11,6 @@ function visibleText(data: string): string {
   return normalizeTerminalOutput(data);
 }
 
-export function cleanPaneSnapshot(data: string): string {
-  const lines = paneLines(data);
-
-  return collapseRepeatedLines(lines).join('\n').trim();
-}
-
-export function latestCompletedCodexResponse(data: string): string | null {
-  const lines = paneLines(data);
-  if (isCodexWorking(data)) {
-    return null;
-  }
-
-  return latestCodexResponse(data);
-}
-
-export function latestCodexResponse(data: string): string | null {
-  const lines = paneLines(data);
-
-  const lastResponseBullet = findLastIndex(lines, (line) => {
-    const trimmed = visibleText(line).trimStart();
-    return trimmed.startsWith('• ') && !/^•\s*Working\s*\(/i.test(trimmed);
-  });
-  if (lastResponseBullet === -1) {
-    return null;
-  }
-
-  const promptStart = findLastIndex(lines.slice(0, lastResponseBullet), (line) => isUserPromptLine(visibleText(line).trim()));
-  const responseStart = promptStart === -1 ? lastResponseBullet : promptStart + 1;
-  const response: string[] = [];
-  for (const line of lines.slice(responseStart)) {
-    const trimmed = visibleText(line).trim();
-    if (response.length > 0 && isPromptOrStatusLine(trimmed)) {
-      break;
-    }
-    if (isIgnorableResponseLine(trimmed)) {
-      continue;
-    }
-    response.push(line);
-  }
-
-  const cleaned = collapseRepeatedLines(response).join('\n').trim();
-  return cleaned || null;
-}
-
-export function isCodexWorking(data: string): boolean {
-  return paneLines(data).some((line) => /esc to interrupt|^\s*•\s*Working\s*\(/i.test(visibleText(line)));
-}
-
 export function chunkText(text: string, maxLength: number): string[] {
   const chunks: string[] = [];
   let remaining = text;
@@ -107,57 +59,6 @@ export function plainTelegramLines(text: string): string[] {
     .split('\n')
     .map((line) => line.trimEnd())
     .filter((line) => line.trim().length > 0);
-}
-
-function isDecorativeLine(line: string): boolean {
-  const trimmed = visibleText(line).trim();
-  if (/^[╭╮╰╯│─┌┐└┘├┤┬┴┼╞╡═\s]+$/.test(trimmed)) {
-    return true;
-  }
-  if (/^Tip: /.test(trimmed)) {
-    return true;
-  }
-  if (/^model:\s+/.test(trimmed) || /^directory:\s+/.test(trimmed)) {
-    return true;
-  }
-  if (/^>_ OpenAI Codex/.test(trimmed)) {
-    return true;
-  }
-  return false;
-}
-
-function paneLines(data: string): string[] {
-  return normalizeTerminalOutput(data)
-    .split('\n')
-    .map((line) => line.trimEnd())
-    .filter((line) => visibleText(line).trim().length > 0)
-    .filter((line) => !isDecorativeLine(line))
-    .filter((line) => !isIgnorablePaneLine(visibleText(line).trim()));
-}
-
-function isPromptOrStatusLine(trimmed: string): boolean {
-  return isUserPromptLine(trimmed)
-    || /^agentic\s+/.test(trimmed)
-    || /^•\s*Working\s*\(/i.test(trimmed)
-    || /^─\s*Worked for\b/.test(trimmed);
-}
-
-function isUserPromptLine(trimmed: string): boolean {
-  return trimmed.startsWith('› ');
-}
-
-function isIgnorablePaneLine(trimmed: string): boolean {
-  return /^⚠ Model metadata for `agentic` not found/.test(trimmed)
-    || /^can degrade performance and cause issues\.$/.test(trimmed)
-    || /^fallback metadata;/.test(trimmed)
-    || /^issues\.$/.test(trimmed)
-    || /^─\s*Worked for\b/.test(trimmed)
-    || /^agentic\s+/.test(trimmed)
-    || /^› (Write tests for @filename|Summarize recent commits|Implement \{feature\}|Improve documentation in @filename)/.test(trimmed);
-}
-
-function isIgnorableResponseLine(trimmed: string): boolean {
-  return isIgnorablePaneLine(trimmed) || /^⚠ /.test(trimmed);
 }
 
 function normalizeWrappedLines(text: string): string {
@@ -287,25 +188,6 @@ function isThinkingLine(trimmed: string): boolean {
     || /^•\s+I\s+need\s+to\s+think\b/i.test(trimmed)
     || /^•\s+I\s+need\s+to\s+(provide|answer|decide|figure|check|inspect|verify)\b/i.test(trimmed)
     || /^•\s+Let\s+me\s+think\b/i.test(trimmed);
-}
-
-function findLastIndex<T>(items: T[], predicate: (item: T) => boolean): number {
-  for (let index = items.length - 1; index >= 0; index -= 1) {
-    if (predicate(items[index])) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function collapseRepeatedLines(lines: string[]): string[] {
-  const collapsed: string[] = [];
-  for (const line of lines) {
-    if (collapsed[collapsed.length - 1] !== line) {
-      collapsed.push(line);
-    }
-  }
-  return collapsed;
 }
 
 function escapeMarkdownV2(text: string): string {

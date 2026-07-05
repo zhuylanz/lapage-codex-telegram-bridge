@@ -1,7 +1,7 @@
 import { Bot, Context } from 'grammy';
 import type { BridgeConfig } from './config.js';
 import { CodexSession } from './codex-session.js';
-import { chunkText, formatTelegramMarkdown, isCodexWorking, latestCodexResponse, latestCompletedCodexResponse, plainTelegramText } from './text.js';
+import { chunkText, formatTelegramMarkdown, plainTelegramText } from './text.js';
 
 export class TelegramCodexBridge {
   private readonly bot: Bot;
@@ -9,11 +9,6 @@ export class TelegramCodexBridge {
   private activeChatId: number | null = null;
   private outputBuffer = '';
   private lastOutputAt: Date | null = null;
-  private flushTimer: NodeJS.Timeout | null = null;
-  private pollTimer: NodeJS.Timeout | null = null;
-  private lastPaneResponse = '';
-  private lastSentResponse = '';
-  private lastSnapshotSentAt = 0;
   private streamMessageId: number | null = null;
   private lastStreamText = '';
   private lastStreamEditAt = 0;
@@ -23,11 +18,14 @@ export class TelegramCodexBridge {
   constructor(private readonly config: BridgeConfig) {
     this.bot = new Bot(config.token);
     this.codex = new CodexSession(config);
+    this.codex.on('response', (text, final) => void this.handleCodexResponse(text, final));
+    this.codex.on('turnCompleted', () => this.stopTypingIndicator());
+    this.codex.on('error', (message) => console.error('Codex app-server:', message));
+    this.codex.on('exit', (code, signal) => console.error('Codex app-server exited:', code ?? signal ?? 'unknown'));
   }
 
   async start(): Promise<void> {
     await this.codex.start();
-    this.startPollingOutput();
 
     this.bot.on('message', async (context) => this.handleMessage(context));
     this.bot.catch((error) => {
@@ -38,13 +36,8 @@ export class TelegramCodexBridge {
   }
 
   async stop(): Promise<void> {
-    this.stopPollingOutput();
     this.stopTypingIndicator();
     await this.codex.stop();
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
     await this.bot.stop();
   }
 
@@ -77,13 +70,13 @@ export class TelegramCodexBridge {
       await this.codex.start();
     }
 
-    await this.codex.waitUntilReady(Boolean(this.lastOutputAt));
-    await this.codex.sendText(text);
+    this.outputBuffer = '';
     const streamMessage = await context.reply('Codex is working…');
     this.streamMessageId = streamMessage.message_id;
     this.lastStreamText = 'Codex is working…';
     this.lastStreamEditAt = Date.now();
     this.startTypingIndicator();
+    await this.codex.sendText(text);
   }
 
   private async handleCommand(context: Context, text: string): Promise<boolean> {
@@ -96,41 +89,24 @@ export class TelegramCodexBridge {
         await context.reply(this.statusText());
         return true;
       case '/flush':
-        await this.readNewOutput(true);
         await this.flushOutput(true);
         return true;
       case '/interrupt':
         await this.codex.interrupt();
-        await context.reply('Sent Ctrl-C to Codex.');
+        await context.reply('Sent interrupt to Codex.');
         return true;
       case '/restart':
         await this.codex.restart();
         this.resetSnapshots();
-        this.stopTypingIndicator();
-        await context.reply('Restarted Codex.');
+        await context.reply('Restarted Codex app-server.');
         return true;
       case '/stop':
         await this.codex.stop();
         this.stopTypingIndicator();
-        await context.reply('Stopped Codex. Send any message to start it again.');
+        await context.reply('Stopped Codex app-server. Send any message to start it again.');
         return true;
       default:
         return false;
-    }
-  }
-
-  private startPollingOutput(): void {
-    this.stopPollingOutput();
-    this.pollTimer = setInterval(() => {
-      void this.readNewOutput();
-      void this.refreshCodexRunningState();
-    }, this.config.pollIntervalMs);
-  }
-
-  private stopPollingOutput(): void {
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
     }
   }
 
@@ -161,68 +137,22 @@ export class TelegramCodexBridge {
     await this.bot.api.sendChatAction(this.activeChatId, 'typing').catch(() => undefined);
   }
 
-  private async readNewOutput(force = false): Promise<void> {
-    if (!this.activeChatId || !await this.codex.exists()) {
-      return;
-    }
-
-    const pane = await this.codex.capturePane();
-    const response = force ? latestCompletedCodexResponse(pane) : latestCodexResponse(pane);
-    const working = isCodexWorking(pane);
-
-    if (this.streamMessageId && response) {
-      await this.editStreamMessage(response, !working || force);
-      if (!working || force) {
-        this.stopTypingIndicator();
-      }
-    }
-
-    if (working && !force) {
-      return;
-    }
-
-    if (!response || (!force && response === this.lastPaneResponse)) {
-      return;
-    }
-
-    this.lastPaneResponse = response;
-    if (!force && !this.shouldSendResponse(response)) {
-      return;
-    }
-
-    this.lastSentResponse = response;
-    this.lastSnapshotSentAt = Date.now();
-    this.outputBuffer = response;
+  private async handleCodexResponse(text: string, final: boolean): Promise<void> {
     this.lastOutputAt = new Date();
-    if (!this.streamMessageId) {
-      this.scheduleFlush();
-    }
-  }
+    this.outputBuffer = text;
 
-  private async refreshCodexRunningState(): Promise<void> {
-    const exists = await this.codex.exists();
-    if (!exists && this.codex.isRunning) {
-      this.outputBuffer = '[Codex tmux session exited]';
-      this.scheduleFlush();
-    }
-  }
-
-  private shouldSendResponse(response: string): boolean {
-    if (response === this.lastSentResponse) {
-      return false;
-    }
-    return true;
-  }
-
-  private scheduleFlush(): void {
-    if (this.flushTimer) {
+    if (this.streamMessageId) {
+      await this.editStreamMessage(text, final);
+      if (final) {
+        this.streamMessageId = null;
+        this.outputBuffer = '';
+      }
       return;
     }
 
-    this.flushTimer = setTimeout(async () => {
-      this.flushTimer = null;
+    if (final) {
       await this.flushOutput(false);
-    }, this.config.flushIntervalMs);
+    }
   }
 
   private async flushOutput(force: boolean): Promise<void> {
@@ -260,8 +190,16 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const [chunk] = chunkText(trimmed, this.config.maxTelegramChars);
-    await this.editFormattedMessage(chunk);
+    const chunks = chunkText(trimmed, this.config.maxTelegramChars);
+    const [firstChunk, ...restChunks] = chunks;
+    if (!firstChunk) {
+      return;
+    }
+
+    await this.editFormattedMessage(firstChunk);
+    for (const chunk of restChunks) {
+      await this.sendFormattedMessage(chunk);
+    }
 
     this.lastStreamText = trimmed;
     this.lastStreamEditAt = now;
@@ -322,11 +260,11 @@ export class TelegramCodexBridge {
   private statusText(): string {
     return [
       `Codex: ${this.codex.isRunning ? 'running' : 'stopped'}`,
-      `tmux: ${this.config.tmuxSession}`,
+      'Transport: stdio app-server',
       `CWD: ${this.config.codexCwd}`,
       `Command: ${[this.config.codexCommand, ...this.config.codexArgs].join(' ')}`,
-      `Submit key: ${this.config.codexSubmitKey}`,
-      `Submit delay: ${this.config.codexSubmitDelayMs}ms`,
+      `Approval policy: ${this.config.codexApprovalPolicy}`,
+      `Sandbox: ${this.config.codexSandbox}`,
       `Buffered chars: ${this.outputBuffer.length}`,
       `Last output: ${this.lastOutputAt?.toISOString() ?? 'none'}`,
     ].join('\n');
@@ -337,18 +275,16 @@ export class TelegramCodexBridge {
       'Telegram ↔ Codex bridge commands:',
       '/status - show bridge status',
       '/flush - send buffered Codex output now',
-      '/interrupt - send Ctrl-C to Codex',
-      '/restart - restart Codex session',
-      '/stop - stop Codex session',
+      '/interrupt - interrupt the active Codex turn',
+      '/restart - restart Codex app-server',
+      '/stop - stop Codex app-server',
       '',
-      'Any other text is sent directly to the Codex CLI.',
+      'Any other text is sent directly to Codex app-server.',
     ].join('\n');
   }
 
   private resetSnapshots(): void {
-    this.lastPaneResponse = '';
-    this.lastSentResponse = '';
-    this.lastSnapshotSentAt = 0;
+    this.outputBuffer = '';
     this.lastOutputAt = null;
     this.streamMessageId = null;
     this.lastStreamText = '';
