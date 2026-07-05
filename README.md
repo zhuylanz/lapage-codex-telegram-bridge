@@ -72,6 +72,8 @@ Open your Telegram bot chat and send `/status`. Any normal message after that is
 
 Codex output updates when app-server reports completed items. The bridge keeps a per-turn cache of completed messages, command summaries, and tool summaries, then edits/splits Telegram messages from that cache until the turn completes.
 
+You can also send screenshots, documents, PDFs, videos, audio, or voice notes. The bridge downloads each attachment to `/tmp/codex-telegram-bridge/` with a random filename, includes the local path in the Codex prompt, and attaches images as `localImage` inputs for Codex vision.
+
 ## Configuration File
 
 By default, the CLI reads:

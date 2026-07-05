@@ -1,7 +1,12 @@
+import { randomUUID } from 'node:crypto';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { basename, extname, join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 import { Bot, Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import type { BridgeConfig } from './config.js';
-import { CodexSession, type CodexCompletedItem } from './codex-session.js';
+import { CodexSession, type CodexAttachment, type CodexCompletedItem } from './codex-session.js';
 import { formatTelegramMarkdownChunks, safePlainTelegramChunks, safePlainTelegramText } from './text.js';
 
 type RenderItem = {
@@ -9,6 +14,15 @@ type RenderItem = {
   order: number;
   text: string;
 };
+
+type TelegramAttachmentSource = {
+  fileId: string;
+  originalName: string;
+  mimeType?: string;
+  kind: 'image' | 'file';
+};
+
+const attachmentTmpDir = join(tmpdir(), 'codex-telegram-bridge');
 
 export class TelegramCodexBridge {
   private readonly bot: Bot;
@@ -64,13 +78,14 @@ export class TelegramCodexBridge {
 
     this.activeChatId = chatId;
 
-    const text = context.message?.text ?? '';
-    if (!text.trim()) {
-      await context.reply('Send text to forward it to Codex.');
+    const text = context.message?.text ?? context.message?.caption ?? '';
+    const attachmentSources = this.extractAttachmentSources(context);
+    if (!text.trim() && attachmentSources.length === 0) {
+      await context.reply('Send text or an attachment to forward it to Codex.');
       return;
     }
 
-    if (await this.handleCommand(context, text.trim())) {
+    if (context.message?.text && await this.handleCommand(context, text.trim())) {
       return;
     }
 
@@ -83,7 +98,123 @@ export class TelegramCodexBridge {
     const streamMessage = await context.reply('Codex is working…');
     this.renderMessageIds = [streamMessage.message_id];
     this.startTypingIndicator();
-    await this.codex.sendText(text);
+
+    const attachments = await this.downloadAttachments(attachmentSources);
+    await this.codex.sendText(text, attachments);
+  }
+
+  private extractAttachmentSources(context: Context): TelegramAttachmentSource[] {
+    const message = context.message;
+    if (!message) {
+      return [];
+    }
+
+    const sources: TelegramAttachmentSource[] = [];
+
+    const photo = message.photo?.at(-1);
+    if (photo) {
+      sources.push({
+        fileId: photo.file_id,
+        originalName: `telegram-photo-${photo.file_unique_id}.jpg`,
+        mimeType: 'image/jpeg',
+        kind: 'image',
+      });
+    }
+
+    if (message.document) {
+      const mimeType = message.document.mime_type;
+      sources.push({
+        fileId: message.document.file_id,
+        originalName: message.document.file_name ?? `telegram-document-${message.document.file_unique_id}${extensionForMime(mimeType)}`,
+        mimeType,
+        kind: mimeType?.startsWith('image/') ? 'image' : 'file',
+      });
+    }
+
+    if (message.video) {
+      sources.push({
+        fileId: message.video.file_id,
+        originalName: message.video.file_name ?? `telegram-video-${message.video.file_unique_id}.mp4`,
+        mimeType: message.video.mime_type,
+        kind: 'file',
+      });
+    }
+
+    if (message.animation) {
+      sources.push({
+        fileId: message.animation.file_id,
+        originalName: message.animation.file_name ?? `telegram-animation-${message.animation.file_unique_id}.mp4`,
+        mimeType: message.animation.mime_type,
+        kind: 'file',
+      });
+    }
+
+    if (message.audio) {
+      sources.push({
+        fileId: message.audio.file_id,
+        originalName: message.audio.file_name ?? `telegram-audio-${message.audio.file_unique_id}${extensionForMime(message.audio.mime_type)}`,
+        mimeType: message.audio.mime_type,
+        kind: 'file',
+      });
+    }
+
+    if (message.voice) {
+      sources.push({
+        fileId: message.voice.file_id,
+        originalName: `telegram-voice-${message.voice.file_unique_id}.ogg`,
+        mimeType: message.voice.mime_type,
+        kind: 'file',
+      });
+    }
+
+    return sources;
+  }
+
+  private async downloadAttachments(sources: TelegramAttachmentSource[]): Promise<CodexAttachment[]> {
+    if (sources.length === 0) {
+      return [];
+    }
+
+    await mkdir(attachmentTmpDir, { recursive: true });
+    const attachments: CodexAttachment[] = [];
+
+    for (const source of sources) {
+      try {
+        attachments.push(await this.downloadAttachment(source));
+      } catch (error) {
+        console.error('Telegram attachment download failed:', telegramErrorSummary(error));
+      }
+    }
+
+    return attachments;
+  }
+
+  private async downloadAttachment(source: TelegramAttachmentSource): Promise<CodexAttachment> {
+    const file = await this.bot.api.getFile(source.fileId);
+    if (!file.file_path) {
+      throw new Error(`Telegram did not return file_path for ${source.originalName}`);
+    }
+
+    const token = this.config.token;
+    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new Error(`Download failed with ${response.status} ${response.statusText}`);
+    }
+
+    const data = Buffer.from(await response.arrayBuffer());
+    const safeName = safeFileName(source.originalName);
+    const extension = extname(safeName) || extensionForMime(source.mimeType);
+    const fileName = `${randomUUID()}${extension}`;
+    const path = join(attachmentTmpDir, fileName);
+    await writeFile(path, data);
+
+    return {
+      path,
+      name: basename(safeName),
+      mimeType: source.mimeType,
+      kind: source.kind,
+    };
   }
 
   private async handleCommand(context: Context, text: string): Promise<boolean> {
@@ -393,6 +524,33 @@ function isTelegramMessageNotModified(error: unknown): boolean {
 
 function compactCommand(command: string): string {
   return command.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function safeFileName(name: string): string {
+  return basename(name).replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-');
+}
+
+function extensionForMime(mimeType: string | undefined): string {
+  switch (mimeType) {
+    case 'image/jpeg':
+      return '.jpg';
+    case 'image/png':
+      return '.png';
+    case 'image/webp':
+      return '.webp';
+    case 'image/gif':
+      return '.gif';
+    case 'application/pdf':
+      return '.pdf';
+    case 'video/mp4':
+      return '.mp4';
+    case 'audio/mpeg':
+      return '.mp3';
+    case 'audio/ogg':
+      return '.ogg';
+    default:
+      return '';
+  }
 }
 
 function completedAtMs(item: CodexCompletedItem): number | null {
