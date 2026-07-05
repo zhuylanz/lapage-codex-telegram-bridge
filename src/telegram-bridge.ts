@@ -1,7 +1,14 @@
 import { Bot, Context } from 'grammy';
+import type { Message } from 'grammy/types';
 import type { BridgeConfig } from './config.js';
-import { CodexSession } from './codex-session.js';
-import { chunkText, formatTelegramMarkdown, plainTelegramText } from './text.js';
+import { CodexSession, type CodexCompletedItem } from './codex-session.js';
+import { formatTelegramMarkdownChunks, safePlainTelegramChunks, safePlainTelegramText } from './text.js';
+
+type RenderItem = {
+  id: string;
+  order: number;
+  text: string;
+};
 
 export class TelegramCodexBridge {
   private readonly bot: Bot;
@@ -9,17 +16,18 @@ export class TelegramCodexBridge {
   private activeChatId: number | null = null;
   private outputBuffer = '';
   private lastOutputAt: Date | null = null;
-  private streamMessageId: number | null = null;
-  private lastStreamText = '';
-  private lastStreamEditAt = 0;
+  private turnActive = false;
+  private renderItems = new Map<string, RenderItem>();
+  private renderOrder = 0;
+  private renderMessageIds: number[] = [];
   private typingTimer: NodeJS.Timeout | null = null;
   private sendQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly config: BridgeConfig) {
     this.bot = new Bot(config.token);
     this.codex = new CodexSession(config);
-    this.codex.on('response', (text, final) => void this.handleCodexResponse(text, final));
-    this.codex.on('turnCompleted', () => this.stopTypingIndicator());
+    this.codex.on('itemCompleted', (item) => void this.handleCodexItemCompleted(item));
+    this.codex.on('turnCompleted', () => void this.handleCodexTurnCompleted());
     this.codex.on('error', (message) => console.error('Codex app-server:', message));
     this.codex.on('exit', (code, signal) => console.error('Codex app-server exited:', code ?? signal ?? 'unknown'));
   }
@@ -70,11 +78,10 @@ export class TelegramCodexBridge {
       await this.codex.start();
     }
 
-    this.outputBuffer = '';
+    this.resetTurnRenderState();
+    this.turnActive = true;
     const streamMessage = await context.reply('Codex is working…');
-    this.streamMessageId = streamMessage.message_id;
-    this.lastStreamText = 'Codex is working…';
-    this.lastStreamEditAt = Date.now();
+    this.renderMessageIds = [streamMessage.message_id];
     this.startTypingIndicator();
     await this.codex.sendText(text);
   }
@@ -89,7 +96,7 @@ export class TelegramCodexBridge {
         await context.reply(this.statusText());
         return true;
       case '/flush':
-        await this.flushOutput(true);
+        await this.renderTurnCache(true);
         return true;
       case '/interrupt':
         await this.codex.interrupt();
@@ -137,101 +144,122 @@ export class TelegramCodexBridge {
     await this.bot.api.sendChatAction(this.activeChatId, 'typing').catch(() => undefined);
   }
 
-  private async handleCodexResponse(text: string, final: boolean): Promise<void> {
+  private async handleCodexItemCompleted(item: CodexCompletedItem): Promise<void> {
+    if (!this.turnActive) {
+      return;
+    }
+
+    const rendered = renderCompletedItem(item);
+    if (!rendered) {
+      return;
+    }
+
     this.lastOutputAt = new Date();
-    this.outputBuffer = text;
-
-    if (this.streamMessageId) {
-      await this.editStreamMessage(text, final);
-      if (final) {
-        this.streamMessageId = null;
-        this.outputBuffer = '';
-      }
-      return;
-    }
-
-    if (final) {
-      await this.flushOutput(false);
-    }
+    this.renderItems.set(rendered.id, rendered);
+    this.outputBuffer = this.renderCachedText();
+    await this.renderTurnCache(false);
   }
 
-  private async flushOutput(force: boolean): Promise<void> {
-    if (!this.activeChatId) {
+  private async handleCodexTurnCompleted(): Promise<void> {
+    if (!this.turnActive) {
       return;
     }
 
-    const trimmed = this.outputBuffer.trimEnd();
-    if (!trimmed) {
-      if (force) {
-        await this.queueTelegramSend(() => this.bot.api.sendMessage(this.activeChatId!, 'No buffered output.'));
-      }
-      this.outputBuffer = '';
-      return;
-    }
-
+    await this.renderTurnCache(true);
+    this.turnActive = false;
     this.outputBuffer = '';
-    for (const chunk of chunkText(trimmed, this.config.maxTelegramChars)) {
-      await this.sendFormattedMessage(chunk);
-    }
+    this.resetTurnRenderState();
+    this.stopTypingIndicator();
   }
 
-  private async editStreamMessage(text: string, force: boolean): Promise<void> {
-    if (!this.activeChatId || !this.streamMessageId) {
-      return;
-    }
-
-    const trimmed = text.trim();
-    if (!trimmed || trimmed === this.lastStreamText) {
-      return;
-    }
-
-    const now = Date.now();
-    if (!force && !this.isMeaningfulStreamChange(trimmed, now)) {
-      return;
-    }
-
-    const chunks = chunkText(trimmed, this.config.maxTelegramChars);
-    const [firstChunk, ...restChunks] = chunks;
-    if (!firstChunk) {
-      return;
-    }
-
-    await this.editFormattedMessage(firstChunk);
-    for (const chunk of restChunks) {
-      await this.sendFormattedMessage(chunk);
-    }
-
-    this.lastStreamText = trimmed;
-    this.lastStreamEditAt = now;
-  }
-
-  private async sendFormattedMessage(text: string): Promise<void> {
+  private async renderTurnCache(force: boolean): Promise<void> {
     if (!this.activeChatId) {
       return;
     }
 
-    const markdown = formatTelegramMarkdown(text);
+    const text = this.renderCachedText();
+    if (!text) {
+      if (force) {
+        await this.queueTelegramSend(() => this.bot.api.sendMessage(this.activeChatId!, 'No completed output yet.'));
+      }
+      return;
+    }
+
+    const markdownChunks = formatTelegramMarkdownChunks(text, this.config.maxTelegramChars);
+    const fallbackChunks = safePlainTelegramChunks(text, this.config.maxTelegramChars);
+
+    for (let index = 0; index < markdownChunks.length; index += 1) {
+      const markdown = markdownChunks[index];
+      const fallback = fallbackChunks[index] ?? safePlainTelegramText(markdown);
+      const messageId = this.renderMessageIds[index];
+      if (messageId) {
+        const edited = await this.editFormattedMarkdown(messageId, markdown, fallback);
+        if (!edited) {
+          const sent = await this.sendFormattedMarkdownAndReturn(markdown, fallback);
+          if (sent) {
+            this.renderMessageIds[index] = sent.message_id;
+          }
+        }
+      } else {
+        const sent = await this.sendFormattedMarkdownAndReturn(markdown, fallback);
+        if (sent) {
+          this.renderMessageIds[index] = sent.message_id;
+        }
+      }
+    }
+
+    this.renderMessageIds = this.renderMessageIds.slice(0, markdownChunks.length);
+  }
+
+  private renderCachedText(): string {
+    return [...this.renderItems.values()]
+      .sort((first, second) => first.order - second.order)
+      .map((item) => item.text)
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+  }
+
+  private async sendFormattedMarkdownAndReturn(markdown: string, fallback: string): Promise<Message.TextMessage | null> {
+    if (!this.activeChatId) {
+      return null;
+    }
+
     const chatId = this.activeChatId;
     const sent = await this.queueTelegramSend(() => this.bot.api.sendMessage(chatId, markdown, { parse_mode: 'MarkdownV2' }))
-      .then(() => true)
-      .catch(() => false);
-    if (!sent) {
-      await this.queueTelegramSend(() => this.bot.api.sendMessage(chatId, plainTelegramText(text)));
+      .catch((error) => {
+        console.error('Telegram Markdown send failed:', telegramErrorSummary(error));
+        return null;
+      });
+    if (sent) {
+      return sent;
     }
+
+    return this.queueTelegramSend(() => this.bot.api.sendMessage(chatId, fallback)).catch(() => null);
   }
 
-  private async editFormattedMessage(text: string): Promise<void> {
-    if (!this.activeChatId || !this.streamMessageId) {
-      return;
+  private async editFormattedMarkdown(messageId: number, markdown: string, fallback: string): Promise<boolean> {
+    if (!this.activeChatId) {
+      return false;
     }
 
-    const markdown = formatTelegramMarkdown(text);
-    const edited = await this.bot.api.editMessageText(this.activeChatId, this.streamMessageId, markdown, {
+    const edited = await this.bot.api.editMessageText(this.activeChatId, messageId, markdown, {
       parse_mode: 'MarkdownV2',
-    }).then(() => true).catch(() => false);
-    if (!edited) {
-      await this.bot.api.editMessageText(this.activeChatId, this.streamMessageId, plainTelegramText(text)).catch(() => undefined);
+    }).then(() => true).catch((error) => {
+      if (isTelegramMessageNotModified(error)) {
+        return true;
+      }
+
+      console.error('Telegram Markdown edit failed:', telegramErrorSummary(error));
+      return false;
+    });
+    if (edited) {
+      return true;
     }
+
+    return this.bot.api.editMessageText(this.activeChatId, messageId, fallback)
+      .then(() => true)
+      .catch(() => false);
   }
 
   private queueTelegramSend<T>(operation: () => Promise<T>): Promise<T> {
@@ -245,18 +273,6 @@ export class TelegramCodexBridge {
     return next;
   }
 
-  private isMeaningfulStreamChange(nextText: string, now: number): boolean {
-    if (now - this.lastStreamEditAt < this.config.streamEditIntervalMs) {
-      return false;
-    }
-
-    if (nextText.length < this.lastStreamText.length) {
-      return true;
-    }
-
-    return nextText.length - this.lastStreamText.length >= this.config.streamMinChangeChars;
-  }
-
   private statusText(): string {
     return [
       `Codex: ${this.codex.isRunning ? 'running' : 'stopped'}`,
@@ -265,6 +281,7 @@ export class TelegramCodexBridge {
       `Command: ${this.config.codexCommand} app-server --stdio`,
       `Approval policy: ${this.config.codexApprovalPolicy}`,
       `Sandbox: ${this.config.codexSandbox}`,
+      `Completed items: ${this.renderItems.size}`,
       `Buffered chars: ${this.outputBuffer.length}`,
       `Last output: ${this.lastOutputAt?.toISOString() ?? 'none'}`,
     ].join('\n');
@@ -274,7 +291,7 @@ export class TelegramCodexBridge {
     return [
       'Telegram ↔ Codex bridge commands:',
       '/status - show bridge status',
-      '/flush - send buffered Codex output now',
+      '/flush - send completed Codex output now',
       '/interrupt - interrupt the active Codex turn',
       '/restart - restart Codex app-server',
       '/stop - stop Codex app-server',
@@ -286,10 +303,46 @@ export class TelegramCodexBridge {
   private resetSnapshots(): void {
     this.outputBuffer = '';
     this.lastOutputAt = null;
-    this.streamMessageId = null;
-    this.lastStreamText = '';
-    this.lastStreamEditAt = 0;
+    this.resetTurnRenderState();
     this.stopTypingIndicator();
+  }
+
+  private resetTurnRenderState(): void {
+    this.turnActive = false;
+    this.renderItems.clear();
+    this.renderOrder = 0;
+    this.renderMessageIds = [];
+  }
+}
+
+function renderCompletedItem(item: CodexCompletedItem): RenderItem | null {
+  const id = typeof item.id === 'string' ? item.id : `${item.type ?? 'item'}-${Date.now()}`;
+  const order = completedAtMs(item) ?? Date.now();
+
+  switch (item.type) {
+    case 'agentMessage': {
+      const text = typeof item.text === 'string' ? item.text.trim() : '';
+      return text ? { id, order, text } : null;
+    }
+    case 'commandExecution': {
+      const command = typeof item.command === 'string' ? compactCommand(item.command) : 'command';
+      const status = typeof item.status === 'string' ? item.status : 'completed';
+      const exitCode = typeof item.exitCode === 'number' ? `, exit ${item.exitCode}` : '';
+      const duration = typeof item.durationMs === 'number' ? `, ${Math.round(item.durationMs / 100) / 10}s` : '';
+      return {
+        id,
+        order,
+        text: [`🔧 Ran \`${command}\``, `Status: ${status}${exitCode}${duration}`].join('\n'),
+      };
+    }
+    case 'mcpToolCall': {
+      const server = typeof item.server === 'string' ? item.server : 'mcp';
+      const tool = typeof item.tool === 'string' ? item.tool : 'tool';
+      const status = typeof item.status === 'string' ? item.status : 'completed';
+      return { id, order, text: `🔌 Tool \`${server}/${tool}\`\nStatus: ${status}` };
+    }
+    default:
+      return null;
   }
 }
 
@@ -319,6 +372,32 @@ function telegramRetryAfterMs(error: unknown): number | null {
   }
 
   return null;
+}
+
+function telegramErrorSummary(error: unknown): string {
+  const description = (error as { description?: string }).description;
+  if (description) {
+    return description;
+  }
+
+  if (error instanceof Error) {
+    return error.message;
+  }
+
+  return String(error);
+}
+
+function isTelegramMessageNotModified(error: unknown): boolean {
+  return /message is not modified/i.test(telegramErrorSummary(error));
+}
+
+function compactCommand(command: string): string {
+  return command.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function completedAtMs(item: CodexCompletedItem): number | null {
+  const value = item.completedAtMs;
+  return typeof value === 'number' ? value : null;
 }
 
 function sleep(ms: number): Promise<void> {

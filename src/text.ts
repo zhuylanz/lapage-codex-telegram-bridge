@@ -40,11 +40,67 @@ export function formatTelegramMarkdown(text: string): string {
     .trim();
 }
 
+export function formatTelegramMarkdownChunks(text: string, maxLength: number): string[] {
+  const lines = formatTelegramMarkdownLines(text);
+  const chunks: string[] = [];
+  let current = '';
+
+  for (const line of lines) {
+    const nextLine = current ? `\n\n${line}` : line;
+    if (current && current.length + nextLine.length > maxLength) {
+      chunks.push(current);
+      current = line;
+      continue;
+    }
+    current += nextLine;
+  }
+
+  if (current) {
+    chunks.push(current);
+  }
+
+  return chunks.flatMap((chunk) => chunk.length > maxLength ? hardSplitText(chunk, maxLength) : [chunk]);
+}
+
 export function formatTelegramMarkdownLines(text: string): string[] {
-  return normalizeWrappedLines(text)
-    .split('\n')
-    .map(formatTelegramLine)
-    .filter((line) => line.trim().length > 0);
+  const lines = normalizeTerminalOutput(text).split('\n');
+  const formatted: string[] = [];
+  let codeFenceLanguage = '';
+  let codeFenceLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = visibleText(line).trim();
+    const fenceMatch = trimmed.match(/^```([a-zA-Z0-9_-]*)\s*$/);
+
+    if (fenceMatch && codeFenceLines.length === 0 && codeFenceLanguage === '') {
+      codeFenceLanguage = fenceMatch[1] || 'text';
+      codeFenceLines = [];
+      continue;
+    }
+
+    if (trimmed === '```' && codeFenceLanguage) {
+      formatted.push(formatCodeBlock(codeFenceLines.join('\n'), codeFenceLanguage));
+      codeFenceLanguage = '';
+      codeFenceLines = [];
+      continue;
+    }
+
+    if (codeFenceLanguage) {
+      codeFenceLines.push(line);
+      continue;
+    }
+
+    const formattedLine = formatTelegramLine(line);
+    if (formattedLine.trim().length > 0) {
+      formatted.push(formattedLine);
+    }
+  }
+
+  if (codeFenceLanguage) {
+    formatted.push(formatCodeBlock(codeFenceLines.join('\n'), codeFenceLanguage));
+  }
+
+  return formatted;
 }
 
 export function plainTelegramText(text: string): string {
@@ -52,6 +108,20 @@ export function plainTelegramText(text: string): string {
     .join('\n\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+}
+
+export function safePlainTelegramText(text: string): string {
+  return plainTelegramText(text)
+    .replace(/^```[a-zA-Z0-9_-]*\s*$/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^\s*-\s+/gm, '• ')
+    .replace(/^\s{2,}•\s+/gm, '  ◦ ')
+    .trim();
+}
+
+export function safePlainTelegramChunks(text: string, maxLength: number): string[] {
+  return chunkText(safePlainTelegramText(text), maxLength);
 }
 
 export function plainTelegramLines(text: string): string[] {
@@ -107,27 +177,16 @@ function shouldJoinSoftWrap(previous: string, current: string): boolean {
 }
 
 function formatTelegramLine(line: string): string {
-  const style = lineStyle(line);
   const trimmed = visibleText(line).trim();
   if (!trimmed) {
     return '';
   }
 
-  if (style.hasBold && /(?:^•\s+)?Ran\b/.test(trimmed)) {
-    const command = trimmed.replace(/^•\s+Ran\s+/, '').replace(/^Ran\s+/, '');
-    return blockQuote(`🔧 *Ran* ${inlineCode(command)}`);
-  }
   if (trimmed.startsWith('• Ran ')) {
     return blockQuote(`🔧 *Ran* ${inlineCode(trimmed.slice('• Ran '.length))}`);
   }
-  if (style.hasBold && /background terminal/i.test(trimmed)) {
-    return blockQuote(`🔧 _${escapeMarkdownV2(trimmed.replace(/^•\s+/, ''))}_`);
-  }
   if (trimmed.startsWith('• Waited for background terminal')) {
     return blockQuote(`🔧 _${escapeMarkdownV2(trimmed.slice(2))}_`);
-  }
-  if (style.hasDim && isThinkingLine(trimmed)) {
-    return blockQuote(`🧠 _${escapeMarkdownV2(trimmed.slice(2))}_`);
   }
   if (trimmed.startsWith('↳ Interacted with background terminal')) {
     return blockQuote(`🔧 _${escapeMarkdownV2(trimmed)}_`);
@@ -142,38 +201,80 @@ function formatTelegramLine(line: string): string {
     return `• ${escapeMarkdownV2(trimmed.slice(2))}`;
   }
   if (trimmed.startsWith('- ')) {
-    return `  ◦ ${escapeMarkdownV2(trimmed.slice(2))}`;
+    return `• ${formatInlineMarkdown(trimmed.slice(2))}`;
   }
   if (/^\s{2,}\S/.test(visibleText(line))) {
     return `   ${escapeMarkdownV2(trimmed)}`;
   }
 
-  return escapeMarkdownV2(trimmed);
+  return formatInlineMarkdown(trimmed);
+}
+
+function hardSplitText(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let remaining = text;
+  while (remaining.length > maxLength) {
+    chunks.push(remaining.slice(0, maxLength));
+    remaining = remaining.slice(maxLength);
+  }
+  if (remaining) {
+    chunks.push(remaining);
+  }
+  return chunks;
 }
 
 function inlineCode(text: string): string {
   return `\`${text.replace(/[`\\]/g, '\\$&')}\``;
 }
 
-function lineStyle(line: string): { hasDim: boolean; hasBold: boolean } {
-  const sgrMatches = line.match(/\x1b\[[0-9;]*m/g) ?? [];
-  let hasDim = false;
-  let hasBold = false;
+function formatCodeBlock(text: string, language: string): string {
+  return `\`\`\`${escapeCodeFenceLanguage(language)}\n${escapePreText(text)}\n\`\`\``;
+}
 
-  for (const match of sgrMatches) {
-    const codes = match.slice(2, -1).split(';').map((code) => Number(code || 0));
-    if (codes.includes(0)) {
-      continue;
+function escapeCodeFenceLanguage(language: string): string {
+  return language.replace(/[^a-zA-Z0-9_-]/g, '') || 'text';
+}
+
+function escapePreText(text: string): string {
+  return text.replace(/[`\\]/g, '\\$&');
+}
+
+function formatInlineMarkdown(text: string): string {
+  const segments = splitInlineMarkdown(text);
+  return segments.map((segment) => {
+    if (segment.type === 'code') {
+      return inlineCode(segment.text);
     }
-    if (codes.includes(1)) {
-      hasBold = true;
+    if (segment.type === 'bold') {
+      return `*${escapeMarkdownV2(segment.text)}*`;
     }
-    if (codes.includes(2)) {
-      hasDim = true;
+    return escapeMarkdownV2(segment.text);
+  }).join('');
+}
+
+function splitInlineMarkdown(text: string): Array<{ type: 'plain' | 'bold' | 'code'; text: string }> {
+  const segments: Array<{ type: 'plain' | 'bold' | 'code'; text: string }> = [];
+  const pattern = /`([^`]+)`|\*\*([^*]+)\*\*/g;
+  let index = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(text))) {
+    if (match.index > index) {
+      segments.push({ type: 'plain', text: text.slice(index, match.index) });
     }
+    if (match[1] !== undefined) {
+      segments.push({ type: 'code', text: match[1] });
+    } else if (match[2] !== undefined) {
+      segments.push({ type: 'bold', text: match[2] });
+    }
+    index = pattern.lastIndex;
   }
 
-  return { hasDim, hasBold };
+  if (index < text.length) {
+    segments.push({ type: 'plain', text: text.slice(index) });
+  }
+
+  return segments;
 }
 
 function blockQuote(markdown: string): string {
@@ -181,13 +282,6 @@ function blockQuote(markdown: string): string {
     .split('\n')
     .map((line) => `> ${line}`)
     .join('\n');
-}
-
-function isThinkingLine(trimmed: string): boolean {
-  return /^•\s+I(?:’|'|`)?m\s+(thinking|considering|checking|looking|trying|wondering|deciding|figuring|reasoning|planning)\b/i.test(trimmed)
-    || /^•\s+I\s+need\s+to\s+think\b/i.test(trimmed)
-    || /^•\s+I\s+need\s+to\s+(provide|answer|decide|figure|check|inspect|verify)\b/i.test(trimmed)
-    || /^•\s+Let\s+me\s+think\b/i.test(trimmed);
 }
 
 function escapeMarkdownV2(text: string): string {

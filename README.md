@@ -70,6 +70,8 @@ codex-telegram-bridge
 
 Open your Telegram bot chat and send `/status`. Any normal message after that is sent to Codex as a prompt.
 
+Codex output updates when app-server reports completed items. The bridge keeps a per-turn cache of completed messages, command summaries, and tool summaries, then edits/splits Telegram messages from that cache until the turn completes.
+
 ## Configuration File
 
 By default, the CLI reads:

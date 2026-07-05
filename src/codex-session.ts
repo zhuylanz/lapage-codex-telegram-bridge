@@ -4,7 +4,13 @@ import { createInterface } from 'node:readline';
 
 import type { BridgeConfig } from './config.js';
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue | undefined };
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue | undefined };
 
 type RpcResponse = {
   id: number;
@@ -26,19 +32,13 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
-type AgentMessageItem = {
-  type: 'agentMessage';
-  text: string;
-};
-
-type Turn = {
-  id: string;
-  status?: unknown;
-  items?: unknown[];
+export type CodexCompletedItem = Record<string, unknown> & {
+  id?: string;
+  type?: string;
 };
 
 export type CodexSessionEvents = {
-  response: [text: string, final: boolean];
+  itemCompleted: [item: CodexCompletedItem];
   turnStarted: [];
   turnCompleted: [];
   error: [message: string];
@@ -46,9 +46,18 @@ export type CodexSessionEvents = {
 };
 
 export declare interface CodexSession {
-  on<K extends keyof CodexSessionEvents>(event: K, listener: (...args: CodexSessionEvents[K]) => void): this;
-  off<K extends keyof CodexSessionEvents>(event: K, listener: (...args: CodexSessionEvents[K]) => void): this;
-  emit<K extends keyof CodexSessionEvents>(event: K, ...args: CodexSessionEvents[K]): boolean;
+  on<K extends keyof CodexSessionEvents>(
+    event: K,
+    listener: (...args: CodexSessionEvents[K]) => void,
+  ): this;
+  off<K extends keyof CodexSessionEvents>(
+    event: K,
+    listener: (...args: CodexSessionEvents[K]) => void,
+  ): this;
+  emit<K extends keyof CodexSessionEvents>(
+    event: K,
+    ...args: CodexSessionEvents[K]
+  ): boolean;
 }
 
 export class CodexSession extends EventEmitter {
@@ -59,8 +68,6 @@ export class CodexSession extends EventEmitter {
   private pendingRequests = new Map<number, PendingRequest>();
   private threadId: string | null = null;
   private activeTurnId: string | null = null;
-  private responseByItemId = new Map<string, string>();
-  private currentResponse = '';
 
   constructor(private readonly config: BridgeConfig) {
     super();
@@ -86,8 +93,6 @@ export class CodexSession extends EventEmitter {
     this.running = false;
     this.threadId = null;
     this.activeTurnId = null;
-    this.currentResponse = '';
-    this.responseByItemId.clear();
 
     for (const pending of this.pendingRequests.values()) {
       pending.reject(new Error('Codex app-server stopped.'));
@@ -111,15 +116,14 @@ export class CodexSession extends EventEmitter {
       throw new Error('Codex thread is not ready.');
     }
 
-    this.currentResponse = '';
-    this.responseByItemId.clear();
-
     const result = await this.request('turn/start', {
       threadId: this.threadId,
       input: [{ type: 'text', text, text_elements: [] }],
     });
 
-    const turnId = getString((result as { turn?: { id?: unknown } } | undefined)?.turn?.id);
+    const turnId = getString(
+      (result as { turn?: { id?: unknown } } | undefined)?.turn?.id,
+    );
     if (turnId) {
       this.activeTurnId = turnId;
     }
@@ -153,7 +157,11 @@ export class CodexSession extends EventEmitter {
       this.activeTurnId = null;
       this.process = null;
       for (const pending of this.pendingRequests.values()) {
-        pending.reject(new Error(`Codex app-server exited${code === null ? '' : ` with code ${code}`}.`));
+        pending.reject(
+          new Error(
+            `Codex app-server exited${code === null ? '' : ` with code ${code}`}.`,
+          ),
+        );
       }
       this.pendingRequests.clear();
       this.emit('exit', code, signal);
@@ -166,7 +174,9 @@ export class CodexSession extends EventEmitter {
       }
     });
 
-    createInterface({ input: this.process.stdout }).on('line', (line) => this.handleLine(line));
+    createInterface({ input: this.process.stdout }).on('line', (line) =>
+      this.handleLine(line),
+    );
 
     await this.request('initialize', {
       clientInfo: {
@@ -191,7 +201,10 @@ export class CodexSession extends EventEmitter {
       ephemeral: false,
     });
 
-    const threadId = getString((threadStartResult as { thread?: { id?: unknown } } | undefined)?.thread?.id);
+    const threadId = getString(
+      (threadStartResult as { thread?: { id?: unknown } } | undefined)?.thread
+        ?.id,
+    );
     if (!threadId) {
       throw new Error('Codex app-server did not return a thread id.');
     }
@@ -267,46 +280,33 @@ export class CodexSession extends EventEmitter {
   private handleNotification(notification: ServerNotification): void {
     switch (notification.method) {
       case 'turn/started': {
-        const turnId = getString((notification.params as { turn?: { id?: unknown } } | undefined)?.turn?.id);
+        const turnId = getString(
+          (notification.params as { turn?: { id?: unknown } } | undefined)?.turn
+            ?.id,
+        );
         if (turnId) {
           this.activeTurnId = turnId;
         }
         this.emit('turnStarted');
         return;
       }
-      case 'item/agentMessage/delta': {
-        const params = notification.params as { itemId?: unknown; delta?: unknown } | undefined;
-        const itemId = getString(params?.itemId);
-        const delta = getString(params?.delta);
-        if (itemId && delta) {
-          const itemText = `${this.responseByItemId.get(itemId) ?? ''}${delta}`;
-          this.responseByItemId.set(itemId, itemText);
-          this.currentResponse = itemText;
-          this.emit('response', this.currentResponse, false);
-        }
-        return;
-      }
       case 'item/completed': {
-        const item = (notification.params as { item?: unknown } | undefined)?.item;
-        if (isAgentMessageItem(item)) {
-          this.currentResponse = item.text;
-          this.emit('response', this.currentResponse, false);
+        const item = (notification.params as { item?: unknown } | undefined)
+          ?.item;
+        if (isCompletedItem(item)) {
+          this.emit('itemCompleted', item);
         }
         return;
       }
       case 'turn/completed': {
-        const turn = (notification.params as { turn?: Turn } | undefined)?.turn;
-        const finalResponse = latestAgentMessage(turn) ?? this.currentResponse;
-        if (finalResponse) {
-          this.currentResponse = finalResponse;
-          this.emit('response', finalResponse, true);
-        }
         this.activeTurnId = null;
         this.emit('turnCompleted');
         return;
       }
       case 'error': {
-        const message = getString((notification.params as { message?: unknown } | undefined)?.message);
+        const message = getString(
+          (notification.params as { message?: unknown } | undefined)?.message,
+        );
         if (message) {
           this.emit('error', message);
         }
@@ -318,25 +318,12 @@ export class CodexSession extends EventEmitter {
   }
 }
 
-function latestAgentMessage(turn: Turn | undefined): string | null {
-  if (!turn?.items) {
-    return null;
-  }
-
-  for (const item of [...turn.items].reverse()) {
-    if (isAgentMessageItem(item) && item.text.trim()) {
-      return item.text;
-    }
-  }
-
-  return null;
-}
-
-function isAgentMessageItem(value: unknown): value is AgentMessageItem {
-  return typeof value === 'object'
-    && value !== null
-    && (value as { type?: unknown }).type === 'agentMessage'
-    && typeof (value as { text?: unknown }).text === 'string';
+function isCompletedItem(value: unknown): value is CodexCompletedItem {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    typeof (value as { type?: unknown }).type === 'string'
+  );
 }
 
 function getString(value: unknown): string | null {
