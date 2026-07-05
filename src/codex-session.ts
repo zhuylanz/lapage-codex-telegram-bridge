@@ -141,7 +141,7 @@ export class CodexSession extends EventEmitter {
       return;
     }
 
-    this.process = spawn(this.config.codexCommand, this.config.codexArgs, {
+    this.process = spawn(this.config.codexCommand, ['app-server', '--stdio'], {
       cwd: this.config.codexCwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -188,7 +188,7 @@ export class CodexSession extends EventEmitter {
       sandbox: this.config.codexSandbox,
       threadSource: 'telegram-bridge',
       sessionStartSource: 'startup',
-      ephemeral: this.config.codexEphemeral,
+      ephemeral: false,
     });
 
     const threadId = getString((threadStartResult as { thread?: { id?: unknown } } | undefined)?.thread?.id);

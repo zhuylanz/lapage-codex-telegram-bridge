@@ -94,10 +94,8 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric Telegram user IDs allowed to use the bot. |
 | `CODEX_CWD` | current directory | Working directory where Codex starts. `~` is supported. |
 | `CODEX_COMMAND` | `codex` | Codex command or binary path. |
-| `CODEX_ARGS` | `app-server --stdio` | Arguments used to start Codex app-server over stdio. |
 | `CODEX_APPROVAL_POLICY` | `never` | App-server thread approval policy: `never`, `on-request`, `on-failure`, or `untrusted`. |
 | `CODEX_SANDBOX` | `danger-full-access` | App-server thread sandbox: `danger-full-access`, `workspace-write`, or `read-only`. |
-| `CODEX_EPHEMERAL` | `false` | Whether to create ephemeral app-server threads. |
 | `STREAM_EDIT_INTERVAL_MS` | `650` | Minimum interval between Telegram message edits. |
 | `STREAM_MIN_CHANGE_CHARS` | `24` | Minimum text growth before editing mid-response. |
 | `TYPING_INTERVAL_MS` | `4000` | How often to send Telegram typing action. |
@@ -130,7 +128,7 @@ The bridge runs Codex as a child process with stdio JSON-RPC. To inspect protoco
 codex app-server --stdio
 ```
 
-Then send newline-delimited JSON-RPC messages, starting with `initialize` followed by the `initialized` notification.
+The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only changes the binary path.
 
 ## Install From Source
 
