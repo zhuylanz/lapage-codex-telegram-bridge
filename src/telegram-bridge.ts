@@ -262,7 +262,7 @@ export class TelegramCodexBridge {
       `Codex: ${this.codex.isRunning ? 'running' : 'stopped'}`,
       'Transport: stdio app-server',
       `CWD: ${this.config.codexCwd}`,
-      `Command: ${[this.config.codexCommand, ...this.config.codexArgs].join(' ')}`,
+      `Command: ${this.config.codexCommand} app-server --stdio`,
       `Approval policy: ${this.config.codexApprovalPolicy}`,
       `Sandbox: ${this.config.codexSandbox}`,
       `Buffered chars: ${this.outputBuffer.length}`,
