@@ -2,20 +2,20 @@
 
 Control a local **Codex CLI** session from Telegram without opening any inbound ports to the internet.
 
-This package is useful when Codex runs on a home PC, workstation, homelab box, or private server and you want a simple mobile chat interface. The bridge starts Codex inside a detached `tmux` session, receives Telegram messages from an allowlisted user, sends them into Codex, and relays Codex output back to Telegram.
+This package is useful when Codex runs on a home PC, workstation, homelab box, or private server and you want a simple mobile chat interface. The bridge starts `codex app-server` over stdio, receives Telegram messages from an allowlisted user, sends them into Codex, and streams Codex output back to Telegram.
 
 ## Why Use This
 
 - No public SSH, HTTP, webhook, tunnel, or reverse proxy is required.
 - Telegram provides the outbound connection path from your machine.
-- Codex keeps running in `tmux`, so the session can survive terminal disconnects.
+- Codex uses the app-server JSON-RPC protocol instead of terminal screen scraping.
+- Stdio transport stays local-only and avoids exposing a network listener.
 - Access is restricted to the Telegram user IDs you allowlist.
 
 ## Requirements
 
 - Node.js 22 or newer
 - npm
-- `tmux`
 - Codex CLI available on `PATH`
 - A Telegram bot token from [@BotFather](https://t.me/BotFather)
 - Your numeric Telegram user ID, for example from [@userinfobot](https://t.me/userinfobot)
@@ -25,24 +25,7 @@ Check prerequisites:
 ```sh
 node --version
 npm --version
-tmux -V
 codex --version
-```
-
-Install `tmux` if it is missing:
-
-```sh
-# macOS
-brew install tmux
-
-# Ubuntu / Debian
-sudo apt update && sudo apt install -y tmux
-
-# Fedora
-sudo dnf install -y tmux
-
-# Arch Linux
-sudo pacman -S tmux
 ```
 
 ## Quick Start
@@ -111,15 +94,10 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric Telegram user IDs allowed to use the bot. |
 | `CODEX_CWD` | current directory | Working directory where Codex starts. `~` is supported. |
 | `CODEX_COMMAND` | `codex` | Codex command or binary path. |
-| `CODEX_ARGS` | `--search --yolo` | Extra Codex startup arguments. |
-| `CODEX_SUBMIT_KEY` | `Enter` | tmux key used to submit a prompt to Codex. |
-| `CODEX_SUBMIT_DELAY_MS` | `800` | Delay after pasting text before pressing submit. |
-| `CODEX_STARTUP_DELAY_MS` | `1500` | Delay before first prompt if Codex has not produced output yet. |
-| `TMUX_SESSION` | `codex-telegram-bridge` | Detached tmux session name. |
-| `CODEX_COLS` | `120` | tmux pane width. |
-| `CODEX_ROWS` | `40` | tmux pane height. |
-| `POLL_INTERVAL_MS` | `500` | How often the bridge polls tmux output. |
-| `FLUSH_INTERVAL_MS` | `1200` | Delay before flushing non-stream fallback output. |
+| `CODEX_ARGS` | `app-server --stdio` | Arguments used to start Codex app-server over stdio. |
+| `CODEX_APPROVAL_POLICY` | `never` | App-server thread approval policy: `never`, `on-request`, `on-failure`, or `untrusted`. |
+| `CODEX_SANDBOX` | `danger-full-access` | App-server thread sandbox: `danger-full-access`, `workspace-write`, or `read-only`. |
+| `CODEX_EPHEMERAL` | `false` | Whether to create ephemeral app-server threads. |
 | `STREAM_EDIT_INTERVAL_MS` | `650` | Minimum interval between Telegram message edits. |
 | `STREAM_MIN_CHANGE_CHARS` | `24` | Minimum text growth before editing mid-response. |
 | `TYPING_INTERVAL_MS` | `4000` | How often to send Telegram typing action. |
@@ -127,38 +105,32 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 
 ## Telegram Commands
 
-- `/status` — show bridge state, tmux session, working directory, and Codex command.
+- `/status` — show bridge state, stdio transport, working directory, and Codex command.
 - `/flush` — force-read and relay the latest Codex response.
-- `/interrupt` — send Ctrl-C to Codex.
-- `/restart` — restart the Codex tmux session.
-- `/stop` — stop the Codex tmux session.
+- `/interrupt` — interrupt the active Codex turn.
+- `/restart` — restart Codex app-server.
+- `/stop` — stop Codex app-server.
 - Any other text is sent directly to Codex as a prompt.
 
 ## Running as a Background Service
 
-For a long-running home server setup, run the bridge with your preferred process manager, for example `systemd`, `pm2`, `launchd`, or a persistent `tmux` session.
+For a long-running home server setup, run the bridge with your preferred process manager, for example `systemd`, `pm2`, or `launchd`.
 
-Example with `tmux`:
+Example with `pm2`:
 
 ```sh
-tmux new -s codex-telegram-bridge-runner 'codex-telegram-bridge'
-```
-
-Detach from tmux with:
-
-```text
-Ctrl-b, then d
+pm2 start codex-telegram-bridge --name codex-telegram-bridge
 ```
 
 ## Debugging Codex
 
-The bridge itself runs Codex inside another detached `tmux` session. Attach to it with:
+The bridge runs Codex as a child process with stdio JSON-RPC. To inspect protocol behavior directly, run:
 
 ```sh
-tmux attach -t codex-telegram-bridge
+codex app-server --stdio
 ```
 
-If `TMUX_SESSION` is changed in the config file, use that session name instead.
+Then send newline-delimited JSON-RPC messages, starting with `initialize` followed by the `initialized` notification.
 
 ## Install From Source
 
@@ -197,7 +169,7 @@ Recommended safeguards:
 - Do not share your Telegram bot token.
 - Run the bridge under a user account with appropriate file permissions.
 - Point `CODEX_CWD` at a workspace you are comfortable controlling remotely.
-- Understand that `CODEX_ARGS=--yolo` allows Codex to act with fewer confirmations.
+- Understand that `CODEX_APPROVAL_POLICY=never` and `CODEX_SANDBOX=danger-full-access` allow Codex to act with fewer confirmations and broader machine access.
 
 ## Repository
 

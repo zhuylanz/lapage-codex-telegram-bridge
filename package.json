@@ -24,7 +24,7 @@
     "codex-cli",
     "telegram",
     "telegram-bot",
-    "tmux",
+    "app-server",
     "remote-control",
     "agent"
   ],
