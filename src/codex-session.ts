@@ -37,6 +37,13 @@ export type CodexCompletedItem = Record<string, unknown> & {
   type?: string;
 };
 
+export type CodexAttachment = {
+  path: string;
+  name: string;
+  mimeType?: string;
+  kind: 'image' | 'file';
+};
+
 export type CodexSessionEvents = {
   itemCompleted: [item: CodexCompletedItem];
   turnStarted: [];
@@ -110,15 +117,30 @@ export class CodexSession extends EventEmitter {
     await this.start();
   }
 
-  async sendText(text: string): Promise<void> {
+  async sendText(text: string, attachments: CodexAttachment[] = []): Promise<void> {
     await this.start();
     if (!this.threadId) {
       throw new Error('Codex thread is not ready.');
     }
 
+    const input: JsonValue[] = [{
+      type: 'text',
+      text: textWithAttachmentContext(text, attachments),
+      text_elements: [],
+    }];
+
+    for (const attachment of attachments) {
+      if (attachment.kind === 'image') {
+        input.push({
+          type: 'localImage',
+          path: attachment.path,
+        });
+      }
+    }
+
     const result = await this.request('turn/start', {
       threadId: this.threadId,
-      input: [{ type: 'text', text, text_elements: [] }],
+      input,
     });
 
     const turnId = getString(
@@ -328,4 +350,23 @@ function isCompletedItem(value: unknown): value is CodexCompletedItem {
 
 function getString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function textWithAttachmentContext(text: string, attachments: CodexAttachment[]): string {
+  const trimmed = text.trim();
+  if (attachments.length === 0) {
+    return trimmed;
+  }
+
+  const attachmentLines = attachments.map((attachment, index) => {
+    const mime = attachment.mimeType ? `, ${attachment.mimeType}` : '';
+    return `${index + 1}. ${attachment.name} (${attachment.kind}${mime}): ${attachment.path}`;
+  });
+
+  return [
+    trimmed || 'Please inspect the attached file(s).',
+    '',
+    'Attached file(s) saved locally:',
+    ...attachmentLines,
+  ].join('\n');
 }
