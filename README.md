@@ -70,7 +70,9 @@ codex-telegram-bridge
 
 Open your Telegram bot chat and send `/status`. Any normal message after that is sent to Codex as a prompt.
 
-Each allowed Telegram user gets an isolated Codex app-server process and thread. Different users can work at the same time without sharing session state.
+Private chats get one isolated Codex app-server process and thread per allowed Telegram user. Group chats share one Codex session per group, so allowed users in the same group collaborate in the same Codex context.
+
+In groups, the bot only responds to allowed users when the bot is mentioned, for example `@your_bot inspect this`, or when replying to one of the bot's messages. The bot mention is stripped before the prompt is sent to Codex.
 
 If a user sends another prompt while their Codex turn is still active, the bridge rejects that prompt with a busy message. Send `/interrupt` first if you want to stop the current turn and replace it.
 
