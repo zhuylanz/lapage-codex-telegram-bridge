@@ -56,6 +56,7 @@ export class TelegramCodexBridge {
     this.botUsername = me.username ?? null;
 
     this.bot.on('message', async (context) => this.handleMessage(context));
+    this.bot.on('edited_message', async (context) => this.handleMessage(context));
     this.bot.catch((error) => {
       console.error('Telegram bot error:', error.message);
     });
@@ -72,10 +73,11 @@ export class TelegramCodexBridge {
   }
 
   private async handleMessage(context: Context): Promise<void> {
+    const message = context.msg;
     const chatId = context.chat?.id;
     const chatType = context.chat?.type;
     const userId = context.from?.id;
-    const rawText = context.message?.text ?? context.message?.caption ?? '';
+    const rawText = message?.text ?? message?.caption ?? '';
 
     if (!chatId) {
       return;
@@ -98,7 +100,7 @@ export class TelegramCodexBridge {
       return;
     }
 
-    if (context.message?.text && await this.handleCommand(context, state, text.trim())) {
+    if (message?.text && await this.handleCommand(context, state, text.trim())) {
       return;
     }
 
@@ -182,7 +184,7 @@ export class TelegramCodexBridge {
   }
 
   private isReplyToBot(context: Context): boolean {
-    return Boolean(this.botId && context.message?.reply_to_message?.from?.id === this.botId);
+    return Boolean(this.botId && context.msg?.reply_to_message?.from?.id === this.botId);
   }
 
   private stripBotMention(text: string): string {
@@ -194,7 +196,7 @@ export class TelegramCodexBridge {
   }
 
   private extractAttachmentSources(context: Context): TelegramAttachmentSource[] {
-    const message = context.message;
+    const message = context.msg;
     if (!message) {
       return [];
     }
