@@ -31,6 +31,7 @@ type ChatSessionState = {
   turnActive: boolean;
   renderItems: Map<string, RenderItem>;
   renderMessageIds: number[];
+  notifyWhenComplete: boolean;
   typingTimer: NodeJS.Timeout | null;
   sendQueue: Promise<void>;
 };
@@ -88,6 +89,7 @@ export class TelegramCodexBridge {
     }
 
     if (state.turnActive) {
+      state.notifyWhenComplete = true;
       await context.reply('Codex is still working. Please wait, or send /interrupt to stop the current turn first.');
       return;
     }
@@ -131,6 +133,7 @@ export class TelegramCodexBridge {
       turnActive: false,
       renderItems: new Map(),
       renderMessageIds: [],
+      notifyWhenComplete: false,
       typingTimer: null,
       sendQueue: Promise.resolve(),
     };
@@ -338,6 +341,10 @@ export class TelegramCodexBridge {
 
     await this.renderTurnCache(state, true);
     state.turnActive = false;
+    if (state.notifyWhenComplete) {
+      state.notifyWhenComplete = false;
+      await this.queueTelegramSend(state, () => this.bot.api.sendMessage(state.chatId, '✅ Codex finished. I updated the original response above.'));
+    }
     state.outputBuffer = '';
     this.resetTurnRenderState(state);
     this.stopTypingIndicator(state);
@@ -470,6 +477,7 @@ export class TelegramCodexBridge {
 
   private resetTurnRenderState(state: ChatSessionState): void {
     state.turnActive = false;
+    state.notifyWhenComplete = false;
     state.renderItems.clear();
     state.renderMessageIds = [];
   }
