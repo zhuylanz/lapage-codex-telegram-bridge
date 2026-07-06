@@ -23,6 +23,8 @@ type TelegramAttachmentSource = {
 };
 
 type ChatSessionState = {
+  sessionKey: string;
+  scope: 'private' | 'group';
   userId: number;
   chatId: number;
   codex: CodexSession;
@@ -40,13 +42,19 @@ const attachmentTmpDir = join(tmpdir(), 'codex-telegram-bridge');
 
 export class TelegramCodexBridge {
   private readonly bot: Bot;
-  private readonly sessions = new Map<number, ChatSessionState>();
+  private readonly sessions = new Map<string, ChatSessionState>();
+  private botId: number | null = null;
+  private botUsername: string | null = null;
 
   constructor(private readonly config: BridgeConfig) {
     this.bot = new Bot(config.token);
   }
 
   async start(): Promise<void> {
+    const me = await this.bot.api.getMe();
+    this.botId = me.id;
+    this.botUsername = me.username ?? null;
+
     this.bot.on('message', async (context) => this.handleMessage(context));
     this.bot.catch((error) => {
       console.error('Telegram bot error:', error.message);
@@ -65,9 +73,15 @@ export class TelegramCodexBridge {
 
   private async handleMessage(context: Context): Promise<void> {
     const chatId = context.chat?.id;
+    const chatType = context.chat?.type;
     const userId = context.from?.id;
+    const rawText = context.message?.text ?? context.message?.caption ?? '';
 
     if (!chatId) {
+      return;
+    }
+
+    if (chatType !== 'private' && !this.isGroupMessageAddressedToBot(context, rawText)) {
       return;
     }
 
@@ -76,8 +90,8 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const state = this.getUserState(userId, chatId);
-    const text = context.message?.text ?? context.message?.caption ?? '';
+    const state = this.getSessionState(chatType === 'private' ? 'private' : 'group', userId, chatId);
+    const text = chatType === 'private' ? rawText : this.stripBotMention(rawText);
     const attachmentSources = this.extractAttachmentSources(context);
     if (!text.trim() && attachmentSources.length === 0) {
       await context.reply('Send text or an attachment to forward it to Codex.');
@@ -90,7 +104,7 @@ export class TelegramCodexBridge {
 
     if (state.turnActive) {
       state.notifyWhenComplete = true;
-      await context.reply('Codex is still working. Please wait, or send /interrupt to stop the current turn first.');
+      await context.reply('Agent is still working. Please wait, or send /interrupt to stop the current turn first.');
       return;
     }
 
@@ -100,7 +114,7 @@ export class TelegramCodexBridge {
 
     this.resetTurnRenderState(state);
     state.turnActive = true;
-    const streamMessage = await context.reply('Codex is working…');
+    const streamMessage = await context.reply('Agent is working…');
     state.renderMessageIds = [streamMessage.message_id];
     this.startTypingIndicator(state);
 
@@ -114,10 +128,12 @@ export class TelegramCodexBridge {
     }
   }
 
-  private getUserState(userId: number, chatId: number): ChatSessionState {
-    const existing = this.sessions.get(userId);
+  private getSessionState(scope: 'private' | 'group', userId: number, chatId: number): ChatSessionState {
+    const sessionKey = scope === 'private' ? `user:${userId}` : `group:${chatId}`;
+    const existing = this.sessions.get(sessionKey);
     if (existing) {
       if (!existing.turnActive) {
+        existing.userId = userId;
         existing.chatId = chatId;
       }
       return existing;
@@ -125,6 +141,8 @@ export class TelegramCodexBridge {
 
     const codex = new CodexSession(this.config);
     const state: ChatSessionState = {
+      sessionKey,
+      scope,
       userId,
       chatId,
       codex,
@@ -140,15 +158,39 @@ export class TelegramCodexBridge {
 
     codex.on('itemCompleted', (item) => void this.handleCodexItemCompleted(state, item));
     codex.on('turnCompleted', () => void this.handleCodexTurnCompleted(state));
-    codex.on('error', (message) => console.error(`Codex app-server [user ${userId}, chat ${state.chatId}]:`, message));
+    codex.on('error', (message) => console.error(`Codex app-server [${sessionKey}, user ${state.userId}, chat ${state.chatId}]:`, message));
     codex.on('exit', (code, signal) => {
-      console.error(`Codex app-server exited [user ${userId}, chat ${state.chatId}]:`, code ?? signal ?? 'unknown');
+      console.error(`Codex app-server exited [${sessionKey}, user ${state.userId}, chat ${state.chatId}]:`, code ?? signal ?? 'unknown');
       state.turnActive = false;
       this.stopTypingIndicator(state);
     });
 
-    this.sessions.set(userId, state);
+    this.sessions.set(sessionKey, state);
     return state;
+  }
+
+  private isGroupMessageAddressedToBot(context: Context, text: string): boolean {
+    if (this.isReplyToBot(context)) {
+      return true;
+    }
+
+    if (!this.botUsername) {
+      return false;
+    }
+
+    return text.toLowerCase().includes(`@${this.botUsername.toLowerCase()}`);
+  }
+
+  private isReplyToBot(context: Context): boolean {
+    return Boolean(this.botId && context.message?.reply_to_message?.from?.id === this.botId);
+  }
+
+  private stripBotMention(text: string): string {
+    if (!this.botUsername) {
+      return text;
+    }
+
+    return text.replace(new RegExp(`@${escapeRegExp(this.botUsername)}`, 'gi'), '').trim();
   }
 
   private extractAttachmentSources(context: Context): TelegramAttachmentSource[] {
@@ -281,18 +323,18 @@ export class TelegramCodexBridge {
         await state.codex.interrupt();
         state.turnActive = false;
         this.stopTypingIndicator(state);
-        await context.reply('Interrupted Codex. Send another message when ready.');
+        await context.reply('Interrupted Agent. Send another message when ready.');
         return true;
       case '/restart':
         await state.codex.restart();
         this.resetSnapshots(state);
-        await context.reply('Restarted Codex app-server for this chat.');
+        await context.reply('Restarted Agent app-server for this chat.');
         return true;
       case '/stop':
         await state.codex.stop();
         state.turnActive = false;
         this.stopTypingIndicator(state);
-        await context.reply('Stopped Codex app-server for this chat. Send any message to start it again.');
+        await context.reply('Stopped Agent app-server for this chat. Send any message to start it again.');
         return true;
       default:
         return false;
@@ -343,7 +385,7 @@ export class TelegramCodexBridge {
     state.turnActive = false;
     if (state.notifyWhenComplete) {
       state.notifyWhenComplete = false;
-      await this.queueTelegramSend(state, () => this.bot.api.sendMessage(state.chatId, '✅ Codex finished. I updated the original response above.'));
+      await this.queueTelegramSend(state, () => this.bot.api.sendMessage(state.chatId, '✅ Agent finished. I updated the original response above.'));
     }
     state.outputBuffer = '';
     this.resetTurnRenderState(state);
@@ -443,7 +485,9 @@ export class TelegramCodexBridge {
       `Codex: ${state.codex.isRunning ? 'running' : 'stopped'}`,
       `Turn: ${state.turnActive ? 'active' : 'idle'}`,
       'Transport: stdio app-server',
-      `User: ${state.userId}`,
+      `Session: ${state.sessionKey}`,
+      `Scope: ${state.scope}`,
+      `Last user: ${state.userId}`,
       `Chat: ${state.chatId}`,
       `CWD: ${this.config.codexCwd}`,
       `Command: ${this.config.codexCommand} app-server --stdio`,
@@ -464,7 +508,7 @@ export class TelegramCodexBridge {
       '/restart - restart your Codex app-server',
       '/stop - stop your Codex app-server',
       '',
-      'Any other text or attachment is sent directly to your Codex session.',
+      'Private chats respond directly. Groups respond only to allowed users when mentioned or replied to.',
     ].join('\n');
   }
 
@@ -565,6 +609,10 @@ function compactCommand(command: string): string {
 
 function safeFileName(name: string): string {
   return basename(name).replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function extensionForMime(mimeType: string | undefined): string {
