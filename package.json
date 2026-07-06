@@ -1,6 +1,6 @@
 {
   "name": "@lapage/codex-telegram-bridge",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Private Telegram bridge for controlling Codex CLI on a home PC or server without opening inbound ports.",
   "type": "module",
   "bin": {
