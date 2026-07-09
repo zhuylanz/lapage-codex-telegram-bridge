@@ -80,6 +80,8 @@ Codex output updates when app-server reports completed items. The bridge keeps a
 
 You can also send screenshots, documents, PDFs, videos, audio, or voice notes. The bridge downloads each attachment to `/tmp/codex-telegram-bridge/` with a random filename, includes the local path in the Codex prompt, and attaches images as `localImage` inputs for Codex vision.
 
+Attachment downloads use Telegram's hosted Bot API, which can reject large files with `file is too big`. When that happens, the bridge reports the limit clearly instead of silently sending an empty attachment turn.
+
 ## Configuration File
 
 By default, the CLI reads:

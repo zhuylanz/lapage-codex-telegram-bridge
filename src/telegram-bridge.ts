@@ -19,7 +19,13 @@ type TelegramAttachmentSource = {
   fileId: string;
   originalName: string;
   mimeType?: string;
+  size?: number;
   kind: 'image' | 'file';
+};
+
+type AttachmentDownloadResult = {
+  attachments: CodexAttachment[];
+  failures: string[];
 };
 
 type ChatSessionState = {
@@ -121,8 +127,16 @@ export class TelegramCodexBridge {
     this.startTypingIndicator(state);
 
     try {
-      const attachments = await this.downloadAttachments(attachmentSources);
-      await state.codex.sendText(text, attachments);
+      const { attachments, failures } = await this.downloadAttachments(attachmentSources);
+      if (!text.trim() && attachmentSources.length > 0 && attachments.length === 0) {
+        state.turnActive = false;
+        this.stopTypingIndicator(state);
+        await this.editPlainText(state, streamMessage.message_id, attachmentFailureText(failures));
+        this.resetTurnRenderState(state);
+        return;
+      }
+
+      await state.codex.sendText(textWithAttachmentFailures(text, failures), attachments);
     } catch (error) {
       state.turnActive = false;
       this.stopTypingIndicator(state);
@@ -208,6 +222,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: photo.file_id,
         originalName: `telegram-photo-${photo.file_unique_id}.jpg`,
+        size: photo.file_size,
         mimeType: 'image/jpeg',
         kind: 'image',
       });
@@ -218,6 +233,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: message.document.file_id,
         originalName: message.document.file_name ?? `telegram-document-${message.document.file_unique_id}${extensionForMime(mimeType)}`,
+        size: message.document.file_size,
         mimeType,
         kind: mimeType?.startsWith('image/') ? 'image' : 'file',
       });
@@ -227,6 +243,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: message.video.file_id,
         originalName: message.video.file_name ?? `telegram-video-${message.video.file_unique_id}.mp4`,
+        size: message.video.file_size,
         mimeType: message.video.mime_type,
         kind: 'file',
       });
@@ -236,6 +253,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: message.animation.file_id,
         originalName: message.animation.file_name ?? `telegram-animation-${message.animation.file_unique_id}.mp4`,
+        size: message.animation.file_size,
         mimeType: message.animation.mime_type,
         kind: 'file',
       });
@@ -245,6 +263,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: message.audio.file_id,
         originalName: message.audio.file_name ?? `telegram-audio-${message.audio.file_unique_id}${extensionForMime(message.audio.mime_type)}`,
+        size: message.audio.file_size,
         mimeType: message.audio.mime_type,
         kind: 'file',
       });
@@ -254,6 +273,7 @@ export class TelegramCodexBridge {
       sources.push({
         fileId: message.voice.file_id,
         originalName: `telegram-voice-${message.voice.file_unique_id}.ogg`,
+        size: message.voice.file_size,
         mimeType: message.voice.mime_type,
         kind: 'file',
       });
@@ -262,23 +282,27 @@ export class TelegramCodexBridge {
     return sources;
   }
 
-  private async downloadAttachments(sources: TelegramAttachmentSource[]): Promise<CodexAttachment[]> {
+  private async downloadAttachments(sources: TelegramAttachmentSource[]): Promise<AttachmentDownloadResult> {
     if (sources.length === 0) {
-      return [];
+      return { attachments: [], failures: [] };
     }
 
     await mkdir(attachmentTmpDir, { recursive: true });
     const attachments: CodexAttachment[] = [];
+    const failures: string[] = [];
 
     for (const source of sources) {
       try {
         attachments.push(await this.downloadAttachment(source));
       } catch (error) {
-        console.error('Telegram attachment download failed:', telegramErrorSummary(error));
+        const summary = telegramErrorSummary(error);
+        const failure = `${source.originalName}${source.size ? ` (${formatBytes(source.size)})` : ''}: ${summary}`;
+        failures.push(failure);
+        console.error('Telegram attachment download failed:', failure);
       }
     }
 
-    return attachments;
+    return { attachments, failures };
   }
 
   private async downloadAttachment(source: TelegramAttachmentSource): Promise<CodexAttachment> {
@@ -287,18 +311,18 @@ export class TelegramCodexBridge {
       throw new Error(`Telegram did not return file_path for ${source.originalName}`);
     }
 
-    const token = this.config.token;
-    const url = `https://api.telegram.org/file/bot${token}/${file.file_path}`;
+    const safeName = safeFileName(source.originalName);
+    const extension = extname(safeName) || extensionForMime(source.mimeType);
+    const fileName = `${randomUUID()}${extension}`;
+    const path = join(attachmentTmpDir, fileName);
+
+    const url = `https://api.telegram.org/file/bot${this.config.token}/${file.file_path}`;
     const response = await fetch(url);
     if (!response.ok) {
       throw new Error(`Download failed with ${response.status} ${response.statusText}`);
     }
 
     const data = Buffer.from(await response.arrayBuffer());
-    const safeName = safeFileName(source.originalName);
-    const extension = extname(safeName) || extensionForMime(source.mimeType);
-    const fileName = `${randomUUID()}${extension}`;
-    const path = join(attachmentTmpDir, fileName);
     await writeFile(path, data);
 
     return {
@@ -452,9 +476,9 @@ export class TelegramCodexBridge {
   }
 
   private async editFormattedMarkdown(state: ChatSessionState, messageId: number, markdown: string, fallback: string): Promise<boolean> {
-    const edited = await this.bot.api.editMessageText(state.chatId, messageId, markdown, {
+    const edited = await this.queueTelegramSend(state, () => this.bot.api.editMessageText(state.chatId, messageId, markdown, {
       parse_mode: 'MarkdownV2',
-    }).then(() => true).catch((error) => {
+    })).then(() => true).catch((error) => {
       if (isTelegramMessageNotModified(error)) {
         return true;
       }
@@ -466,14 +490,18 @@ export class TelegramCodexBridge {
       return true;
     }
 
-    return this.bot.api.editMessageText(state.chatId, messageId, fallback)
+    return this.editPlainText(state, messageId, fallback)
       .then(() => true)
       .catch(() => false);
   }
 
+  private async editPlainText(state: ChatSessionState, messageId: number, text: string): Promise<void> {
+    await this.queueTelegramSend(state, () => this.bot.api.editMessageText(state.chatId, messageId, text));
+  }
+
   private queueTelegramSend<T>(state: ChatSessionState, operation: () => Promise<T>): Promise<T> {
     const run = async () => {
-      await sleep(350);
+      await sleep(Math.max(350, this.config.streamEditIntervalMs));
       return retryTelegramOperation(operation);
     };
 
@@ -561,16 +589,21 @@ function renderCompletedItem(item: CodexCompletedItem): RenderItem | null {
 }
 
 async function retryTelegramOperation<T>(operation: () => Promise<T>): Promise<T> {
-  try {
-    return await operation();
-  } catch (error) {
-    const retryAfter = telegramRetryAfterMs(error);
-    if (retryAfter === null) {
-      throw error;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const retryAfter = telegramRetryAfterMs(error);
+      if (retryAfter === null || attempt === 3) {
+        throw error;
+      }
+      await sleep(retryAfter);
     }
-    await sleep(retryAfter);
-    return operation();
   }
+
+  throw lastError;
 }
 
 function telegramRetryAfterMs(error: unknown): number | null {
@@ -607,6 +640,51 @@ function isTelegramMessageNotModified(error: unknown): boolean {
 
 function compactCommand(command: string): string {
   return command.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function textWithAttachmentFailures(text: string, failures: string[]): string {
+  if (failures.length === 0) {
+    return text;
+  }
+
+  return [
+    text.trim() || 'Please review the attachment status below.',
+    '',
+    'Some Telegram attachment(s) could not be downloaded by the bot:',
+    ...failures.map((failure, index) => `${index + 1}. ${failure}`),
+    '',
+    'If the file is too large for the Telegram Bot API, ask the user to provide a smaller file or a downloadable link.',
+  ].join('\n');
+}
+
+function attachmentFailureText(failures: string[]): string {
+  const details = failures.length > 0
+    ? failures.map((failure) => `- ${failure}`).join('\n')
+    : '- Attachment could not be downloaded.';
+
+  return [
+    'I could not download the attachment, so I did not send this turn to Agent.',
+    '',
+    details,
+    '',
+    'Telegram bots cannot download some large files. Please send a smaller file or a downloadable link.',
+  ].join('\n');
+}
+
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return 'unknown size';
+  }
+
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+
+  return `${Math.round(value * 10) / 10} ${units[unitIndex]}`;
 }
 
 function safeFileName(name: string): string {
