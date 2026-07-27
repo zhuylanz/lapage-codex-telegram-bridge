@@ -116,11 +116,17 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 ## Telegram Commands
 
 - `/status` — show your bridge state, stdio transport, working directory, and Codex command.
+- `/new` — create and switch the current chat/user session to a fresh Codex thread.
+- `/resume` — list the 10 most recently updated Codex threads for `CODEX_CWD`.
+- `/resume <number>` — resume a thread from the latest `/resume` list.
+- `/resume <thread-id>` — resume a specific Codex thread by its full ID.
 - `/flush` — force-render your completed Codex output.
 - `/interrupt` — interrupt your active Codex turn.
 - `/restart` — restart your Codex app-server session.
 - `/stop` — stop your Codex app-server session.
 - Any other text or attachment is sent directly to Codex as a prompt.
+
+Thread switching is disabled while Codex is working. Use `/interrupt` first if you need to stop the current turn before running `/new` or `/resume`.
 
 ## Running as a Background Service
 
