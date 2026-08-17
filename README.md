@@ -106,8 +106,8 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric Telegram user IDs allowed to use the bot. |
 | `CODEX_CWD` | current directory | Working directory where Codex starts. `~` is supported. |
 | `CODEX_COMMAND` | `codex` | Codex command or binary path. |
-| `CODEX_MODEL` | unset | Optional Codex model override passed as the global `--model` option. |
-| `CODEX_REASONING_EFFORT` | unset | Optional reasoning effort passed as the global `-c model_reasoning_effort=VALUE` option. |
+| `CODEX_MODEL` | unset | Optional Codex model enforced at app-server startup, thread start/resume, and every turn. |
+| `CODEX_REASONING_EFFORT` | unset | Optional reasoning effort enforced at app-server startup, thread start/resume, and every turn. |
 | `CODEX_APPROVAL_POLICY` | `never` | App-server thread approval policy: `never`, `on-request`, `on-failure`, or `untrusted`. |
 | `CODEX_SANDBOX` | `danger-full-access` | App-server thread sandbox: `danger-full-access`, `workspace-write`, or `read-only`. |
 | `STREAM_EDIT_INTERVAL_MS` | `650` | Minimum interval between Telegram message edits. |
@@ -162,7 +162,7 @@ The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only c
 codex --model gpt-5.6-sol -c model_reasoning_effort=high app-server --stdio
 ```
 
-If either variable is unset, its corresponding option is omitted.
+The bridge also sends configured overrides in every `thread/start`, `thread/resume`, and `turn/start` request. This keeps new threads, resumed threads, and subsequent turns pinned to the deployment configuration even when a saved thread has different model settings. If either variable is unset, its corresponding CLI and RPC fields are omitted.
 
 ## Install From Source
 
@@ -188,6 +188,7 @@ npm start
 ```sh
 npm run typecheck
 npm run build
+npm run test:overrides
 npm run dev
 ```
 

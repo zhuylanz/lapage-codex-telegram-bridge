@@ -1,6 +1,6 @@
 {
   "name": "@lapage/codex-telegram-bridge",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "description": "Private Telegram bridge for controlling Codex CLI on a home PC or server without opening inbound ports.",
   "type": "module",
   "bin": {
@@ -31,6 +31,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "test:overrides": "npm run build && node scripts/assert-rpc-overrides.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "start": "node dist/index.js",

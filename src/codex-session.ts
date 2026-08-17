@@ -32,6 +32,11 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
+type CodexOverrideConfig = Pick<
+  BridgeConfig,
+  'codexModel' | 'codexReasoningEffort'
+>;
+
 export type CodexCompletedItem = Record<string, unknown> & {
   id?: string;
   type?: string;
@@ -62,7 +67,7 @@ export type CodexSessionEvents = {
 };
 
 export function codexAppServerArgs(
-  config: Pick<BridgeConfig, 'codexModel' | 'codexReasoningEffort'>,
+  config: CodexOverrideConfig,
 ): string[] {
   const args: string[] = [];
 
@@ -76,6 +81,71 @@ export function codexAppServerArgs(
 
   args.push('app-server', '--stdio');
   return args;
+}
+
+export function codexThreadOverrides(
+  config: CodexOverrideConfig,
+): {
+  model?: string;
+  config?: { model_reasoning_effort: string };
+} {
+  return {
+    ...(config.codexModel ? { model: config.codexModel } : {}),
+    ...(config.codexReasoningEffort
+      ? { config: { model_reasoning_effort: config.codexReasoningEffort } }
+      : {}),
+  };
+}
+
+export function codexTurnOverrides(
+  config: CodexOverrideConfig,
+): { model?: string; effort?: string } {
+  return {
+    ...(config.codexModel ? { model: config.codexModel } : {}),
+    ...(config.codexReasoningEffort
+      ? { effort: config.codexReasoningEffort }
+      : {}),
+  };
+}
+
+export function codexThreadStartParams(
+  config: BridgeConfig,
+  sessionStartSource: 'startup' | 'clear',
+): JsonValue {
+  return {
+    cwd: config.codexCwd,
+    approvalPolicy: config.codexApprovalPolicy,
+    sandbox: config.codexSandbox,
+    threadSource: 'telegram-bridge',
+    sessionStartSource,
+    ephemeral: false,
+    ...codexThreadOverrides(config),
+  };
+}
+
+export function codexThreadResumeParams(
+  config: BridgeConfig,
+  threadId: string,
+): JsonValue {
+  return {
+    threadId,
+    cwd: config.codexCwd,
+    approvalPolicy: config.codexApprovalPolicy,
+    sandbox: config.codexSandbox,
+    ...codexThreadOverrides(config),
+  };
+}
+
+export function codexTurnStartParams(
+  config: CodexOverrideConfig,
+  threadId: string,
+  input: JsonValue[],
+): JsonValue {
+  return {
+    threadId,
+    input,
+    ...codexTurnOverrides(config),
+  };
 }
 
 export declare interface CodexSession {
@@ -181,12 +251,10 @@ export class CodexSession extends EventEmitter {
     this.assertNoActiveTurn();
 
     const previousThreadId = this.threadId;
-    const result = await this.request('thread/resume', {
-      threadId,
-      cwd: this.config.codexCwd,
-      approvalPolicy: this.config.codexApprovalPolicy,
-      sandbox: this.config.codexSandbox,
-    });
+    const result = await this.request(
+      'thread/resume',
+      codexThreadResumeParams(this.config, threadId),
+    );
     const thread = parseThreadFromResult(result);
     this.threadId = thread.id;
     this.activeTurnId = null;
@@ -215,10 +283,10 @@ export class CodexSession extends EventEmitter {
       }
     }
 
-    const result = await this.request('turn/start', {
-      threadId: this.threadId,
-      input,
-    });
+    const result = await this.request(
+      'turn/start',
+      codexTurnStartParams(this.config, this.threadId, input),
+    );
 
     const turnId = getString(
       (result as { turn?: { id?: unknown } } | undefined)?.turn?.id,
@@ -256,14 +324,10 @@ export class CodexSession extends EventEmitter {
 
   private async startNewThreadInternal(sessionStartSource: 'startup' | 'clear'): Promise<CodexThreadSummary> {
     const previousThreadId = this.threadId;
-    const result = await this.request('thread/start', {
-      cwd: this.config.codexCwd,
-      approvalPolicy: this.config.codexApprovalPolicy,
-      sandbox: this.config.codexSandbox,
-      threadSource: 'telegram-bridge',
-      sessionStartSource,
-      ephemeral: false,
-    });
+    const result = await this.request(
+      'thread/start',
+      codexThreadStartParams(this.config, sessionStartSource),
+    );
     const thread = parseThreadFromResult(result);
     this.threadId = thread.id;
     this.activeTurnId = null;
