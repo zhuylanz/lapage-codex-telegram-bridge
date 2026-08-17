@@ -61,6 +61,23 @@ export type CodexSessionEvents = {
   exit: [code: number | null, signal: NodeJS.Signals | null];
 };
 
+export function codexAppServerArgs(
+  config: Pick<BridgeConfig, 'codexModel' | 'codexReasoningEffort'>,
+): string[] {
+  const args: string[] = [];
+
+  if (config.codexModel) {
+    args.push('--model', config.codexModel);
+  }
+
+  if (config.codexReasoningEffort) {
+    args.push('-c', `model_reasoning_effort=${config.codexReasoningEffort}`);
+  }
+
+  args.push('app-server', '--stdio');
+  return args;
+}
+
 export declare interface CodexSession {
   on<K extends keyof CodexSessionEvents>(
     event: K,
@@ -273,7 +290,7 @@ export class CodexSession extends EventEmitter {
       return;
     }
 
-    this.process = spawn(this.config.codexCommand, ['app-server', '--stdio'], {
+    this.process = spawn(this.config.codexCommand, codexAppServerArgs(this.config), {
       cwd: this.config.codexCwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],

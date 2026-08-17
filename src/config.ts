@@ -3,6 +3,8 @@ export type BridgeConfig = {
   allowedUserIds: Set<number>;
   codexCommand: string;
   codexCwd: string;
+  codexModel?: string;
+  codexReasoningEffort?: string;
   codexApprovalPolicy: string;
   codexSandbox: string;
   streamEditIntervalMs: number;
@@ -29,6 +31,8 @@ export function readConfig(): BridgeConfig {
     allowedUserIds,
     codexCommand: process.env.CODEX_COMMAND || 'codex',
     codexCwd: expandHome(process.env.CODEX_CWD || process.cwd()),
+    codexModel: readOptionalString('CODEX_MODEL'),
+    codexReasoningEffort: readOptionalString('CODEX_REASONING_EFFORT'),
     codexApprovalPolicy: process.env.CODEX_APPROVAL_POLICY || 'never',
     codexSandbox: process.env.CODEX_SANDBOX || 'danger-full-access',
     streamEditIntervalMs: readNumber('STREAM_EDIT_INTERVAL_MS', 650),
@@ -36,6 +40,11 @@ export function readConfig(): BridgeConfig {
     typingIntervalMs: readNumber('TYPING_INTERVAL_MS', 4000),
     maxTelegramChars: Math.min(readNumber('MAX_TELEGRAM_CHARS', 3500), 3900),
   };
+}
+
+function readOptionalString(name: string): string | undefined {
+  const value = process.env[name]?.trim();
+  return value || undefined;
 }
 
 function readNumber(name: string, fallback: number): number {

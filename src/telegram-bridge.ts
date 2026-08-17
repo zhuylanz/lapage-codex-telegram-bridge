@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { Bot, Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import type { BridgeConfig } from './config.js';
-import { CodexSession, type CodexAttachment, type CodexCompletedItem, type CodexThreadSummary } from './codex-session.js';
+import { CodexSession, codexAppServerArgs, type CodexAttachment, type CodexCompletedItem, type CodexThreadSummary } from './codex-session.js';
 import { formatTelegramMarkdownChunks, safePlainTelegramChunks, safePlainTelegramText } from './text.js';
 
 type RenderItem = {
@@ -611,7 +611,7 @@ export class TelegramCodexBridge {
       `Chat: ${state.chatId}`,
       `Thread: ${state.codex.currentThreadId ?? 'none'}`,
       `CWD: ${this.config.codexCwd}`,
-      `Command: ${this.config.codexCommand} app-server --stdio`,
+      `Command: ${this.config.codexCommand} ${codexAppServerArgs(this.config).join(' ')}`,
       `Approval policy: ${this.config.codexApprovalPolicy}`,
       `Sandbox: ${this.config.codexSandbox}`,
       `Completed items: ${state.renderItems.size}`,

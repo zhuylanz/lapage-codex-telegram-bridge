@@ -106,12 +106,22 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric Telegram user IDs allowed to use the bot. |
 | `CODEX_CWD` | current directory | Working directory where Codex starts. `~` is supported. |
 | `CODEX_COMMAND` | `codex` | Codex command or binary path. |
+| `CODEX_MODEL` | unset | Optional Codex model override passed as the global `--model` option. |
+| `CODEX_REASONING_EFFORT` | unset | Optional reasoning effort passed as the global `-c model_reasoning_effort=VALUE` option. |
 | `CODEX_APPROVAL_POLICY` | `never` | App-server thread approval policy: `never`, `on-request`, `on-failure`, or `untrusted`. |
 | `CODEX_SANDBOX` | `danger-full-access` | App-server thread sandbox: `danger-full-access`, `workspace-write`, or `read-only`. |
 | `STREAM_EDIT_INTERVAL_MS` | `650` | Minimum interval between Telegram message edits. |
 | `STREAM_MIN_CHANGE_CHARS` | `24` | Minimum text growth before editing mid-response. |
 | `TYPING_INTERVAL_MS` | `4000` | How often to send Telegram typing action. |
 | `MAX_TELEGRAM_CHARS` | `3500` | Max response chunk size below Telegram's message limit. |
+
+In Docker Compose, set the optional Codex overrides directly; no command wrapper is needed:
+
+```yaml
+environment:
+  CODEX_MODEL: gpt-5.6-sol
+  CODEX_REASONING_EFFORT: high
+```
 
 ## Telegram Commands
 
@@ -146,7 +156,13 @@ The bridge runs Codex as a child process with stdio JSON-RPC. To inspect protoco
 codex app-server --stdio
 ```
 
-The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only changes the binary path.
+The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only changes the binary path. When configured, `CODEX_MODEL` and `CODEX_REASONING_EFFORT` are added as global options before the app-server command:
+
+```sh
+codex --model gpt-5.6-sol -c model_reasoning_effort=high app-server --stdio
+```
+
+If either variable is unset, its corresponding option is omitted.
 
 ## Install From Source
 
