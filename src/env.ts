@@ -60,6 +60,8 @@ function readEnvTemplate(): string {
     'TELEGRAM_ALLOWED_USER_IDS=123456789',
     'CODEX_CWD=~',
     'CODEX_COMMAND=codex',
+    'CODEX_MODEL=',
+    'CODEX_REASONING_EFFORT=',
     'CODEX_APPROVAL_POLICY=never',
     'CODEX_SANDBOX=danger-full-access',
     'STREAM_EDIT_INTERVAL_MS=650',

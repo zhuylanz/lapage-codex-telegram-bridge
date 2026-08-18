@@ -114,6 +114,8 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TELEGRAM_ALLOWED_USER_IDS` | required | Comma-separated numeric Telegram user IDs allowed to use the bot. |
 | `CODEX_CWD` | current directory | Working directory where Codex starts. `~` is supported. |
 | `CODEX_COMMAND` | `codex` | Codex command or binary path. |
+| `CODEX_MODEL` | unset | Optional Codex model enforced at app-server startup, thread start/resume, and every turn. |
+| `CODEX_REASONING_EFFORT` | unset | Optional reasoning effort enforced at app-server startup, thread start/resume, and every turn. |
 | `CODEX_APPROVAL_POLICY` | `never` | App-server thread approval policy: `never`, `on-request`, `on-failure`, or `untrusted`. |
 | `CODEX_SANDBOX` | `danger-full-access` | App-server thread sandbox: `danger-full-access`, `workspace-write`, or `read-only`. |
 | `STREAM_EDIT_INTERVAL_MS` | `650` | Minimum interval between Telegram message edits. |
@@ -121,14 +123,28 @@ CODEX_TELEGRAM_BRIDGE_ENV=/path/to/.env codex-telegram-bridge
 | `TYPING_INTERVAL_MS` | `4000` | How often to send Telegram typing action. |
 | `MAX_TELEGRAM_CHARS` | `3500` | Max response chunk size below Telegram's message limit. |
 
+In Docker Compose, set the optional Codex overrides directly; no command wrapper is needed:
+
+```yaml
+environment:
+  CODEX_MODEL: gpt-5.6-sol
+  CODEX_REASONING_EFFORT: high
+```
+
 ## Telegram Commands
 
 - `/status` — show your bridge state, stdio transport, working directory, and Codex command.
+- `/new` — create and switch the current chat/user session to a fresh Codex thread.
+- `/resume` — list the 10 most recently updated Codex threads for `CODEX_CWD`.
+- `/resume <number>` — resume a thread from the latest `/resume` list.
+- `/resume <thread-id>` — resume a specific Codex thread by its full ID.
 - `/flush` — force-render your completed Codex output.
 - `/interrupt` — interrupt your active Codex turn.
 - `/restart` — restart your Codex app-server session.
 - `/stop` — stop your Codex app-server session.
 - Any other text or attachment is sent directly to Codex as a prompt.
+
+Thread switching is disabled while Codex is working. Use `/interrupt` first if you need to stop the current turn before running `/new` or `/resume`.
 
 ## Running as a Background Service
 
@@ -148,7 +164,13 @@ The bridge runs Codex as a child process with stdio JSON-RPC. To inspect protoco
 codex app-server --stdio
 ```
 
-The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only changes the binary path.
+The bridge always starts Codex with `app-server --stdio`; `CODEX_COMMAND` only changes the binary path. When configured, `CODEX_MODEL` and `CODEX_REASONING_EFFORT` are added as global options before the app-server command:
+
+```sh
+codex --model gpt-5.6-sol -c model_reasoning_effort=high app-server --stdio
+```
+
+The bridge also sends configured overrides in every `thread/start`, `thread/resume`, and `turn/start` request. This keeps new threads, resumed threads, and subsequent turns pinned to the deployment configuration even when a saved thread has different model settings. If either variable is unset, its corresponding CLI and RPC fields are omitted.
 
 ## Install From Source
 
@@ -174,6 +196,7 @@ npm start
 ```sh
 npm run typecheck
 npm run build
+npm run test:overrides
 npm run dev
 ```
 

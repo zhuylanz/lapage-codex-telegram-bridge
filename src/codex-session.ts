@@ -32,6 +32,11 @@ type PendingRequest = {
   reject: (error: Error) => void;
 };
 
+type CodexOverrideConfig = Pick<
+  BridgeConfig,
+  'codexModel' | 'codexReasoningEffort'
+>;
+
 export type CodexCompletedItem = Record<string, unknown> & {
   id?: string;
   type?: string;
@@ -44,6 +49,15 @@ export type CodexAttachment = {
   kind: 'image' | 'file';
 };
 
+export type CodexThreadSummary = {
+  id: string;
+  name: string | null;
+  preview: string;
+  createdAt: number;
+  updatedAt: number;
+  cwd: string;
+};
+
 export type CodexSessionEvents = {
   itemCompleted: [item: CodexCompletedItem];
   turnStarted: [];
@@ -51,6 +65,88 @@ export type CodexSessionEvents = {
   error: [message: string];
   exit: [code: number | null, signal: NodeJS.Signals | null];
 };
+
+export function codexAppServerArgs(
+  config: CodexOverrideConfig,
+): string[] {
+  const args: string[] = [];
+
+  if (config.codexModel) {
+    args.push('--model', config.codexModel);
+  }
+
+  if (config.codexReasoningEffort) {
+    args.push('-c', `model_reasoning_effort=${config.codexReasoningEffort}`);
+  }
+
+  args.push('app-server', '--stdio');
+  return args;
+}
+
+export function codexThreadOverrides(
+  config: CodexOverrideConfig,
+): {
+  model?: string;
+  config?: { model_reasoning_effort: string };
+} {
+  return {
+    ...(config.codexModel ? { model: config.codexModel } : {}),
+    ...(config.codexReasoningEffort
+      ? { config: { model_reasoning_effort: config.codexReasoningEffort } }
+      : {}),
+  };
+}
+
+export function codexTurnOverrides(
+  config: CodexOverrideConfig,
+): { model?: string; effort?: string } {
+  return {
+    ...(config.codexModel ? { model: config.codexModel } : {}),
+    ...(config.codexReasoningEffort
+      ? { effort: config.codexReasoningEffort }
+      : {}),
+  };
+}
+
+export function codexThreadStartParams(
+  config: BridgeConfig,
+  sessionStartSource: 'startup' | 'clear',
+): JsonValue {
+  return {
+    cwd: config.codexCwd,
+    approvalPolicy: config.codexApprovalPolicy,
+    sandbox: config.codexSandbox,
+    threadSource: 'telegram-bridge',
+    sessionStartSource,
+    ephemeral: false,
+    ...codexThreadOverrides(config),
+  };
+}
+
+export function codexThreadResumeParams(
+  config: BridgeConfig,
+  threadId: string,
+): JsonValue {
+  return {
+    threadId,
+    cwd: config.codexCwd,
+    approvalPolicy: config.codexApprovalPolicy,
+    sandbox: config.codexSandbox,
+    ...codexThreadOverrides(config),
+  };
+}
+
+export function codexTurnStartParams(
+  config: CodexOverrideConfig,
+  threadId: string,
+  input: JsonValue[],
+): JsonValue {
+  return {
+    threadId,
+    input,
+    ...codexTurnOverrides(config),
+  };
+}
 
 export declare interface CodexSession {
   on<K extends keyof CodexSessionEvents>(
@@ -70,7 +166,8 @@ export declare interface CodexSession {
 export class CodexSession extends EventEmitter {
   private process: ChildProcessWithoutNullStreams | null = null;
   private running = false;
-  private startPromise: Promise<void> | null = null;
+  private serverStartPromise: Promise<void> | null = null;
+  private defaultThreadPromise: Promise<CodexThreadSummary> | null = null;
   private requestId = 1;
   private pendingRequests = new Map<number, PendingRequest>();
   private threadId: string | null = null;
@@ -84,22 +181,31 @@ export class CodexSession extends EventEmitter {
     return this.running;
   }
 
+  get currentThreadId(): string | null {
+    return this.threadId;
+  }
+
   async start(): Promise<void> {
-    if (this.startPromise) {
-      return this.startPromise;
+    await this.ensureServer();
+    if (this.threadId) {
+      return;
     }
 
-    this.startPromise = this.startServer().finally(() => {
-      this.startPromise = null;
-    });
+    if (!this.defaultThreadPromise) {
+      this.defaultThreadPromise = this.startNewThreadInternal('startup').finally(() => {
+        this.defaultThreadPromise = null;
+      });
+    }
 
-    return this.startPromise;
+    await this.defaultThreadPromise;
   }
 
   async stop(): Promise<void> {
     this.running = false;
     this.threadId = null;
     this.activeTurnId = null;
+    this.serverStartPromise = null;
+    this.defaultThreadPromise = null;
 
     for (const pending of this.pendingRequests.values()) {
       pending.reject(new Error('Codex app-server stopped.'));
@@ -115,6 +221,45 @@ export class CodexSession extends EventEmitter {
   async restart(): Promise<void> {
     await this.stop();
     await this.start();
+  }
+
+  async newThread(): Promise<CodexThreadSummary> {
+    await this.ensureServer();
+    this.assertNoActiveTurn();
+    return this.startNewThreadInternal('clear');
+  }
+
+  async listThreads(limit = 10): Promise<CodexThreadSummary[]> {
+    await this.ensureServer();
+    const result = await this.request('thread/list', {
+      limit,
+      sortKey: 'updated_at',
+      sortDirection: 'desc',
+      sourceKinds: ['appServer', 'cli', 'vscode', 'exec'],
+      archived: false,
+      cwd: this.config.codexCwd,
+    });
+
+    const data = (result as { data?: unknown } | undefined)?.data;
+    return Array.isArray(data)
+      ? data.map(parseThreadSummary).filter((thread): thread is CodexThreadSummary => thread !== null)
+      : [];
+  }
+
+  async resumeThread(threadId: string): Promise<CodexThreadSummary> {
+    await this.ensureServer();
+    this.assertNoActiveTurn();
+
+    const previousThreadId = this.threadId;
+    const result = await this.request(
+      'thread/resume',
+      codexThreadResumeParams(this.config, threadId),
+    );
+    const thread = parseThreadFromResult(result);
+    this.threadId = thread.id;
+    this.activeTurnId = null;
+    await this.unsubscribePreviousThread(previousThreadId, thread.id);
+    return thread;
   }
 
   async sendText(text: string, attachments: CodexAttachment[] = []): Promise<void> {
@@ -138,10 +283,10 @@ export class CodexSession extends EventEmitter {
       }
     }
 
-    const result = await this.request('turn/start', {
-      threadId: this.threadId,
-      input,
-    });
+    const result = await this.request(
+      'turn/start',
+      codexTurnStartParams(this.config, this.threadId, input),
+    );
 
     const turnId = getString(
       (result as { turn?: { id?: unknown } } | undefined)?.turn?.id,
@@ -160,6 +305,48 @@ export class CodexSession extends EventEmitter {
       threadId: this.threadId,
       turnId: this.activeTurnId,
     }).catch(() => undefined);
+    this.activeTurnId = null;
+  }
+
+  private async ensureServer(): Promise<void> {
+    if (this.running && this.process && !this.process.killed) {
+      return;
+    }
+
+    if (!this.serverStartPromise) {
+      this.serverStartPromise = this.startServer().finally(() => {
+        this.serverStartPromise = null;
+      });
+    }
+
+    await this.serverStartPromise;
+  }
+
+  private async startNewThreadInternal(sessionStartSource: 'startup' | 'clear'): Promise<CodexThreadSummary> {
+    const previousThreadId = this.threadId;
+    const result = await this.request(
+      'thread/start',
+      codexThreadStartParams(this.config, sessionStartSource),
+    );
+    const thread = parseThreadFromResult(result);
+    this.threadId = thread.id;
+    this.activeTurnId = null;
+    await this.unsubscribePreviousThread(previousThreadId, thread.id);
+    return thread;
+  }
+
+  private async unsubscribePreviousThread(previousThreadId: string | null, nextThreadId: string): Promise<void> {
+    if (!previousThreadId || previousThreadId === nextThreadId) {
+      return;
+    }
+
+    await this.request('thread/unsubscribe', { threadId: previousThreadId }).catch(() => undefined);
+  }
+
+  private assertNoActiveTurn(): void {
+    if (this.activeTurnId) {
+      throw new Error('Cannot switch threads while a Codex turn is active.');
+    }
   }
 
   private async startServer(): Promise<void> {
@@ -167,7 +354,7 @@ export class CodexSession extends EventEmitter {
       return;
     }
 
-    this.process = spawn(this.config.codexCommand, ['app-server', '--stdio'], {
+    this.process = spawn(this.config.codexCommand, codexAppServerArgs(this.config), {
       cwd: this.config.codexCwd,
       env: process.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -213,25 +400,6 @@ export class CodexSession extends EventEmitter {
     });
 
     this.notify('initialized');
-
-    const threadStartResult = await this.request('thread/start', {
-      cwd: this.config.codexCwd,
-      approvalPolicy: this.config.codexApprovalPolicy,
-      sandbox: this.config.codexSandbox,
-      threadSource: 'telegram-bridge',
-      sessionStartSource: 'startup',
-      ephemeral: false,
-    });
-
-    const threadId = getString(
-      (threadStartResult as { thread?: { id?: unknown } } | undefined)?.thread
-        ?.id,
-    );
-    if (!threadId) {
-      throw new Error('Codex app-server did not return a thread id.');
-    }
-
-    this.threadId = threadId;
     this.running = true;
   }
 
@@ -300,6 +468,11 @@ export class CodexSession extends EventEmitter {
   }
 
   private handleNotification(notification: ServerNotification): void {
+    const notificationThreadId = getString(notification.params?.threadId);
+    if (notificationThreadId && this.threadId && notificationThreadId !== this.threadId) {
+      return;
+    }
+
     switch (notification.method) {
       case 'turn/started': {
         const turnId = getString(
@@ -350,6 +523,43 @@ function isCompletedItem(value: unknown): value is CodexCompletedItem {
 
 function getString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
+}
+
+function getNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function parseThreadFromResult(result: JsonValue | undefined): CodexThreadSummary {
+  const thread = (result as { thread?: unknown } | undefined)?.thread;
+  const parsed = parseThreadSummary(thread);
+  if (!parsed) {
+    throw new Error('Codex app-server did not return a valid thread.');
+  }
+  return parsed;
+}
+
+function parseThreadSummary(value: unknown): CodexThreadSummary | null {
+  if (typeof value !== 'object' || value === null) {
+    return null;
+  }
+
+  const thread = value as Record<string, unknown>;
+  const id = getString(thread.id);
+  const createdAt = getNumber(thread.createdAt);
+  const updatedAt = getNumber(thread.updatedAt);
+  const cwd = getString(thread.cwd);
+  if (!id || createdAt === null || updatedAt === null || !cwd) {
+    return null;
+  }
+
+  return {
+    id,
+    name: getString(thread.name),
+    preview: getString(thread.preview) ?? '',
+    createdAt,
+    updatedAt,
+    cwd,
+  };
 }
 
 function textWithAttachmentContext(text: string, attachments: CodexAttachment[]): string {

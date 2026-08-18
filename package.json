@@ -1,6 +1,10 @@
 {
   "name": "@lapage/codex-telegram-bridge",
+<<<<<<< HEAD
   "version": "1.0.4",
+=======
+  "version": "1.0.7",
+>>>>>>> develop
   "description": "LaPage Digital's open-source Telegram bridge for securely controlling a local Codex CLI session.",
   "type": "module",
   "bin": {
@@ -38,6 +42,7 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "test:overrides": "npm run build && node scripts/assert-rpc-overrides.mjs",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "start": "node dist/index.js",

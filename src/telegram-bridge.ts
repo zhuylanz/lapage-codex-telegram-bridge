@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { Bot, Context } from 'grammy';
 import type { Message } from 'grammy/types';
 import type { BridgeConfig } from './config.js';
-import { CodexSession, type CodexAttachment, type CodexCompletedItem } from './codex-session.js';
+import { CodexSession, codexAppServerArgs, type CodexAttachment, type CodexCompletedItem, type CodexThreadSummary } from './codex-session.js';
 import { formatTelegramMarkdownChunks, safePlainTelegramChunks, safePlainTelegramText } from './text.js';
 
 type RenderItem = {
@@ -39,6 +39,7 @@ type ChatSessionState = {
   turnActive: boolean;
   renderItems: Map<string, RenderItem>;
   renderMessageIds: number[];
+  resumeCandidates: CodexThreadSummary[];
   notifyWhenComplete: boolean;
   typingTimer: NodeJS.Timeout | null;
   sendQueue: Promise<void>;
@@ -167,6 +168,7 @@ export class TelegramCodexBridge {
       turnActive: false,
       renderItems: new Map(),
       renderMessageIds: [],
+      resumeCandidates: [],
       notifyWhenComplete: false,
       typingTimer: null,
       sendQueue: Promise.resolve(),
@@ -334,7 +336,10 @@ export class TelegramCodexBridge {
   }
 
   private async handleCommand(context: Context, state: ChatSessionState, text: string): Promise<boolean> {
-    switch (text) {
+    const [rawCommand = '', ...args] = text.trim().split(/\s+/);
+    const command = rawCommand.toLowerCase();
+
+    switch (command) {
       case '/start':
       case '/help':
         await context.reply(this.helpText());
@@ -344,6 +349,12 @@ export class TelegramCodexBridge {
         return true;
       case '/flush':
         await this.renderTurnCache(state, true);
+        return true;
+      case '/new':
+        await this.handleNewThreadCommand(context, state);
+        return true;
+      case '/resume':
+        await this.handleResumeThreadCommand(context, state, args[0]);
         return true;
       case '/interrupt':
         await state.codex.interrupt();
@@ -365,6 +376,85 @@ export class TelegramCodexBridge {
       default:
         return false;
     }
+  }
+
+  private async handleNewThreadCommand(context: Context, state: ChatSessionState): Promise<void> {
+    if (state.turnActive) {
+      await context.reply('Agent is still working. Send /interrupt before switching threads.');
+      return;
+    }
+
+    try {
+      const thread = await state.codex.newThread();
+      state.resumeCandidates = [];
+      this.resetSnapshots(state);
+      await context.reply(`Started a new Codex thread.\nThread: ${thread.id}`);
+    } catch (error) {
+      await context.reply(`Could not start a new thread: ${telegramErrorSummary(error)}`);
+    }
+  }
+
+  private async handleResumeThreadCommand(context: Context, state: ChatSessionState, selection?: string): Promise<void> {
+    if (state.turnActive) {
+      await context.reply('Agent is still working. Send /interrupt before switching threads.');
+      return;
+    }
+
+    if (!selection) {
+      try {
+        state.resumeCandidates = await state.codex.listThreads(10);
+        await context.reply(this.resumeThreadListText(state));
+      } catch (error) {
+        await context.reply(`Could not list Codex threads: ${telegramErrorSummary(error)}`);
+      }
+      return;
+    }
+
+    const threadId = this.resolveResumeThreadId(state, selection);
+    if (!threadId) {
+      await context.reply('Invalid thread selection. Send /resume first, then use /resume <number>, or provide a full thread ID.');
+      return;
+    }
+
+    try {
+      const thread = await state.codex.resumeThread(threadId);
+      state.resumeCandidates = [];
+      this.resetSnapshots(state);
+      const title = thread.name || thread.preview || 'Untitled thread';
+      await context.reply(`Resumed Codex thread.\n${truncateSingleLine(title, 120)}\nThread: ${thread.id}`);
+    } catch (error) {
+      await context.reply(`Could not resume thread: ${telegramErrorSummary(error)}`);
+    }
+  }
+
+  private resolveResumeThreadId(state: ChatSessionState, selection: string): string | null {
+    if (/^\d+$/.test(selection)) {
+      const index = Number(selection) - 1;
+      return state.resumeCandidates[index]?.id ?? null;
+    }
+
+    return selection.trim() || null;
+  }
+
+  private resumeThreadListText(state: ChatSessionState): string {
+    if (state.resumeCandidates.length === 0) {
+      return 'No resumable Codex threads were found for this workspace.';
+    }
+
+    const currentThreadId = state.codex.currentThreadId;
+    const lines = state.resumeCandidates.map((thread, index) => {
+      const current = thread.id === currentThreadId ? ' [current]' : '';
+      const title = truncateSingleLine(thread.name || thread.preview || 'Untitled thread', 72);
+      return `${index + 1}. ${title}${current}\n   ${formatThreadDate(thread.updatedAt)} · ${thread.id}`;
+    });
+
+    return [
+      'Recent Codex threads:',
+      '',
+      ...lines,
+      '',
+      'Resume with /resume <number> or /resume <thread-id>.',
+    ].join('\n');
   }
 
   private startTypingIndicator(state: ChatSessionState): void {
@@ -519,8 +609,9 @@ export class TelegramCodexBridge {
       `Scope: ${state.scope}`,
       `Last user: ${state.userId}`,
       `Chat: ${state.chatId}`,
+      `Thread: ${state.codex.currentThreadId ?? 'none'}`,
       `CWD: ${this.config.codexCwd}`,
-      `Command: ${this.config.codexCommand} app-server --stdio`,
+      `Command: ${this.config.codexCommand} ${codexAppServerArgs(this.config).join(' ')}`,
       `Approval policy: ${this.config.codexApprovalPolicy}`,
       `Sandbox: ${this.config.codexSandbox}`,
       `Completed items: ${state.renderItems.size}`,
@@ -533,6 +624,9 @@ export class TelegramCodexBridge {
     return [
       'Telegram ↔ Codex bridge commands:',
       '/status - show your bridge status',
+      '/new - start and switch to a new Codex thread',
+      '/resume - list recent Codex threads',
+      '/resume <number-or-id> - resume a listed or specific thread',
       '/flush - send your completed Codex output now',
       '/interrupt - interrupt your active Codex turn',
       '/restart - restart your Codex app-server',
@@ -640,6 +734,15 @@ function isTelegramMessageNotModified(error: unknown): boolean {
 
 function compactCommand(command: string): string {
   return command.replace(/\s+/g, ' ').slice(0, 160);
+}
+
+function truncateSingleLine(value: string, maxLength: number): string {
+  const normalized = value.replace(/\s+/g, ' ').trim();
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength - 1)}…`;
+}
+
+function formatThreadDate(timestampSeconds: number): string {
+  return `${new Date(timestampSeconds * 1000).toISOString().replace('T', ' ').slice(0, 16)} UTC`;
 }
 
 function textWithAttachmentFailures(text: string, failures: string[]): string {

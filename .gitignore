@@ -4,3 +4,5 @@ dist/
 memory/
 .memory/
 .DS_Store
+
+.memory/
