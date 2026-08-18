@@ -1,12 +1,13 @@
 {
   "name": "@lapage/codex-telegram-bridge",
   "version": "1.0.7",
-  "description": "Private Telegram bridge for controlling Codex CLI on a home PC or server without opening inbound ports.",
+  "description": "LaPage Digital's open-source Telegram bridge for securely controlling a local Codex CLI session.",
   "type": "module",
   "bin": {
     "codex-telegram-bridge": "dist/index.js"
   },
   "files": [
+    "assets",
     "dist",
     "README.md",
     ".env.example"
@@ -19,6 +20,10 @@
   "bugs": {
     "url": "https://github.com/zhuylanz/lapage-codex-telegram-bridge/issues"
   },
+  "author": "LaPage Digital",
+  "contributors": [
+    "Huy Lan"
+  ],
   "keywords": [
     "codex",
     "codex-cli",
@@ -26,7 +31,9 @@
     "telegram-bot",
     "app-server",
     "remote-control",
-    "agent"
+    "agent",
+    "lapage",
+    "lapage-digital"
   ],
   "license": "MIT",
   "scripts": {
