@@ -1,4 +1,12 @@
+<p align="center">
+  <a href="https://lapage.vn"><img src="assets/lapage-digital-mark.png" width="96" alt="LaPage Digital"></a>
+</p>
+
 # LaPage Codex Telegram Bridge
+
+**A LaPage Digital open-source bridge for securely controlling a local Codex CLI session from Telegram.**
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-F47A32.svg)](LICENSE)
 
 Control a local **Codex CLI** session from Telegram without opening any inbound ports to the internet.
 
@@ -184,3 +192,11 @@ Recommended safeguards:
 ## Repository
 
 GitHub: <https://github.com/zhuylanz/lapage-codex-telegram-bridge>
+
+## Maintainer
+
+Maintained by [LaPage Digital](https://lapage.vn) — practical AI and automation systems that businesses can own.
+
+## License
+
+Released under the [MIT License](LICENSE).
