@@ -1,10 +1,6 @@
 {
   "name": "@lapage/codex-telegram-bridge",
-<<<<<<< HEAD
-  "version": "1.0.4",
-=======
-  "version": "1.0.7",
->>>>>>> develop
+  "version": "1.0.8",
   "description": "LaPage Digital's open-source Telegram bridge for securely controlling a local Codex CLI session.",
   "type": "module",
   "bin": {
