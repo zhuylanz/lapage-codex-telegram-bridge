@@ -1,9 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { mkdir, realpath, stat, writeFile } from 'node:fs/promises';
+import { basename, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { Bot, Context } from 'grammy';
+import { Bot, Context, InputFile } from 'grammy';
 import type { Message } from 'grammy/types';
 import type { BridgeConfig } from './config.js';
 import { CodexSession, codexAppServerArgs, type CodexAttachment, type CodexCompletedItem, type CodexThreadSummary } from './codex-session.js';
@@ -39,6 +39,7 @@ type ChatSessionState = {
   turnActive: boolean;
   renderItems: Map<string, RenderItem>;
   renderMessageIds: number[];
+  pendingOutboundFiles: string[];
   resumeCandidates: CodexThreadSummary[];
   notifyWhenComplete: boolean;
   typingTimer: NodeJS.Timeout | null;
@@ -168,6 +169,7 @@ export class TelegramCodexBridge {
       turnActive: false,
       renderItems: new Map(),
       renderMessageIds: [],
+      pendingOutboundFiles: [],
       resumeCandidates: [],
       notifyWhenComplete: false,
       typingTimer: null,
@@ -481,7 +483,16 @@ export class TelegramCodexBridge {
       return;
     }
 
-    const rendered = renderCompletedItem(item);
+    const { text, paths } = item.type === 'agentMessage' && typeof item.text === 'string'
+      ? parseTelegramFileRequests(item.text)
+      : { text: null, paths: [] };
+    for (const path of paths) {
+      if (!state.pendingOutboundFiles.includes(path)) {
+        state.pendingOutboundFiles.push(path);
+      }
+    }
+
+    const rendered = renderCompletedItem(text === null ? item : { ...item, text });
     if (!rendered) {
       return;
     }
@@ -497,7 +508,8 @@ export class TelegramCodexBridge {
       return;
     }
 
-    await this.renderTurnCache(state, true);
+    await this.renderTurnCache(state, state.pendingOutboundFiles.length === 0);
+    await this.sendPendingOutboundFiles(state);
     state.turnActive = false;
     if (state.notifyWhenComplete) {
       state.notifyWhenComplete = false;
@@ -506,6 +518,27 @@ export class TelegramCodexBridge {
     state.outputBuffer = '';
     this.resetTurnRenderState(state);
     this.stopTypingIndicator(state);
+  }
+
+  private async sendPendingOutboundFiles(state: ChatSessionState): Promise<void> {
+    const paths = [...state.pendingOutboundFiles];
+    state.pendingOutboundFiles = [];
+
+    for (const requestedPath of paths) {
+      try {
+        const filePath = await resolveWorkspaceFile(this.config.codexCwd, requestedPath);
+        await this.bot.api.sendChatAction(state.chatId, 'upload_document').catch(() => undefined);
+        await this.queueTelegramSend(state, () => this.bot.api.sendDocument(
+          state.chatId,
+          new InputFile(filePath, basename(filePath)),
+        ));
+      } catch (error) {
+        await this.queueTelegramSend(state, () => this.bot.api.sendMessage(
+          state.chatId,
+          `Could not send ${basename(requestedPath) || 'the requested file'}: ${telegramErrorSummary(error)}`,
+        )).catch(() => undefined);
+      }
+    }
   }
 
   private async renderTurnCache(state: ChatSessionState, force: boolean): Promise<void> {
@@ -632,6 +665,7 @@ export class TelegramCodexBridge {
       '/restart - restart your Codex app-server',
       '/stop - stop your Codex app-server',
       '',
+      'Ask Agent to send you a file and it will upload the completed file as a Telegram document.',
       'Private chats respond directly. Groups respond only to allowed users when mentioned or replied to.',
     ].join('\n');
   }
@@ -648,7 +682,43 @@ export class TelegramCodexBridge {
     state.notifyWhenComplete = false;
     state.renderItems.clear();
     state.renderMessageIds = [];
+    state.pendingOutboundFiles = [];
   }
+}
+
+export function parseTelegramFileRequests(text: string): { text: string; paths: string[] } {
+  const paths: string[] = [];
+  const cleanedText = text.replace(/\[\[telegram-file:([^\]\r\n]+)\]\]/g, (_marker, rawPath: string) => {
+    const path = rawPath.trim();
+    if (path && !paths.includes(path)) {
+      paths.push(path);
+    }
+    return '';
+  });
+
+  return {
+    text: cleanedText.replace(/\n{3,}/g, '\n\n').trim(),
+    paths,
+  };
+}
+
+export async function resolveWorkspaceFile(workspaceRoot: string, requestedPath: string): Promise<string> {
+  const workspacePath = await realpath(workspaceRoot);
+  const candidatePath = isAbsolute(requestedPath)
+    ? requestedPath
+    : resolve(workspacePath, requestedPath);
+  const filePath = await realpath(candidatePath);
+  const relativePath = relative(workspacePath, filePath);
+  if (relativePath === '..' || relativePath.startsWith(`..${sep}`) || isAbsolute(relativePath)) {
+    throw new Error('file is outside CODEX_CWD');
+  }
+
+  const fileStat = await stat(filePath);
+  if (!fileStat.isFile()) {
+    throw new Error('path is not a regular file');
+  }
+
+  return filePath;
 }
 
 function renderCompletedItem(item: CodexCompletedItem): RenderItem | null {

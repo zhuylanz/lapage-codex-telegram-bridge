@@ -5,6 +5,7 @@ import {
   codexThreadResumeParams,
   codexThreadStartParams,
   codexTurnStartParams,
+  telegramFileDeliveryInstructions,
 } from '../dist/codex-session.js';
 
 const baseConfig = {
@@ -83,6 +84,7 @@ for (const testCase of cases) {
       threadSource: 'telegram-bridge',
       sessionStartSource: 'clear',
       ephemeral: false,
+      developerInstructions: telegramFileDeliveryInstructions,
       ...testCase.thread,
     },
     `${testCase.name}: thread/start params`,
@@ -94,6 +96,7 @@ for (const testCase of cases) {
       cwd: '/workspace',
       approvalPolicy: 'never',
       sandbox: 'danger-full-access',
+      developerInstructions: telegramFileDeliveryInstructions,
       ...testCase.thread,
     },
     `${testCase.name}: thread/resume params`,

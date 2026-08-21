@@ -38,7 +38,9 @@
   "license": "MIT",
   "scripts": {
     "dev": "tsx src/index.ts",
+    "test:file-delivery": "npm run build && node scripts/assert-file-delivery.mjs",
     "test:overrides": "npm run build && node scripts/assert-rpc-overrides.mjs",
+    "test": "npm run test:file-delivery && npm run test:overrides",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
     "start": "node dist/index.js",

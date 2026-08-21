@@ -37,6 +37,13 @@ type CodexOverrideConfig = Pick<
   'codexModel' | 'codexReasoningEffort'
 >;
 
+export const telegramFileDeliveryInstructions = [
+  'This Codex session is connected to a Telegram bot that can upload files to the current user.',
+  'When, and only when, the user explicitly asks to receive, download, or have a local file sent to them, finish creating the file inside the current workspace and add this marker on its own line in the final response:',
+  '[[telegram-file:/absolute/path/to/file]]',
+  'Use one marker per requested file. Use an absolute path, do not wrap the marker in a code block, and do not emit it for files the user did not ask to receive.',
+].join('\n');
+
 export type CodexCompletedItem = Record<string, unknown> & {
   id?: string;
   type?: string;
@@ -119,6 +126,7 @@ export function codexThreadStartParams(
     threadSource: 'telegram-bridge',
     sessionStartSource,
     ephemeral: false,
+    developerInstructions: telegramFileDeliveryInstructions,
     ...codexThreadOverrides(config),
   };
 }
@@ -132,6 +140,7 @@ export function codexThreadResumeParams(
     cwd: config.codexCwd,
     approvalPolicy: config.codexApprovalPolicy,
     sandbox: config.codexSandbox,
+    developerInstructions: telegramFileDeliveryInstructions,
     ...codexThreadOverrides(config),
   };
 }

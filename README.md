@@ -86,7 +86,19 @@ If a user sends another prompt while their Codex turn is still active, the bridg
 
 Codex output updates when app-server reports completed items. The bridge keeps a per-turn cache of completed messages, command summaries, and tool summaries, then edits/splits Telegram messages from that cache until the turn completes.
 
-You can also send screenshots, documents, PDFs, videos, audio, or voice notes. The bridge downloads each attachment to `/tmp/codex-telegram-bridge/` with a random filename, includes the local path in the Codex prompt, and attaches images as `localImage` inputs for Codex vision.
+## Receiving Files From Codex
+
+Ask Codex to send you a generated or existing workspace file, for example:
+
+```text
+Create the report as a PDF and send it to me.
+```
+
+Codex marks the completed file for delivery, and the bridge uploads it to the current Telegram chat as a document. Multiple requested files are sent individually. Delivery markers are removed from the visible response.
+
+For safety, the bridge only uploads regular files whose resolved paths are inside `CODEX_CWD`. Missing files, directories, and paths that escape the workspace—including through symlinks—are rejected with a visible error message.
+
+You can also send screenshots, documents, PDFs, videos, audio, or voice notes to Codex. The bridge downloads each attachment to `/tmp/codex-telegram-bridge/` with a random filename, includes the local path in the Codex prompt, and attaches images as `localImage` inputs for Codex vision.
 
 Attachment downloads use Telegram's hosted Bot API, which can reject large files with `file is too big`. When that happens, the bridge reports the limit clearly instead of silently sending an empty attachment turn.
 
@@ -196,6 +208,7 @@ npm start
 ```sh
 npm run typecheck
 npm run build
+npm test
 npm run test:overrides
 npm run dev
 ```
