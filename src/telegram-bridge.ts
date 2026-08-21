@@ -48,6 +48,18 @@ type ChatSessionState = {
 
 const attachmentTmpDir = join(tmpdir(), 'codex-telegram-bridge');
 
+export const telegramBotCommands = [
+  { command: 'start', description: 'Show help and available commands' },
+  { command: 'help', description: 'Show help and available commands' },
+  { command: 'status', description: 'Show bridge and Codex status' },
+  { command: 'new', description: 'Start a new Codex thread' },
+  { command: 'resume', description: 'List or resume recent Codex threads' },
+  { command: 'flush', description: 'Send completed Codex output now' },
+  { command: 'interrupt', description: 'Stop the active Codex turn' },
+  { command: 'restart', description: 'Restart Codex for this chat' },
+  { command: 'stop', description: 'Stop Codex for this chat' },
+] as const;
+
 export class TelegramCodexBridge {
   private readonly bot: Bot;
   private readonly sessions = new Map<string, ChatSessionState>();
@@ -62,6 +74,10 @@ export class TelegramCodexBridge {
     const me = await this.bot.api.getMe();
     this.botId = me.id;
     this.botUsername = me.username ?? null;
+
+    await this.bot.api.setMyCommands(telegramBotCommands).catch((error) => {
+      console.error('Could not register Telegram bot commands:', telegramErrorSummary(error));
+    });
 
     this.bot.on('message', async (context) => this.handleMessage(context));
     this.bot.on('edited_message', async (context) => this.handleMessage(context));

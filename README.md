@@ -78,6 +78,8 @@ codex-telegram-bridge
 
 Open your Telegram bot chat and send `/status`. Any normal message after that is sent to Codex as a prompt.
 
+The bridge registers its command menu with Telegram at startup. In supported Telegram clients, typing `/` shows autocomplete suggestions for the available commands.
+
 Private chats get one isolated Codex app-server process and thread per allowed Telegram user. Group chats share one Codex session per group, so allowed users in the same group collaborate in the same Codex context.
 
 In groups, the bot only responds to allowed users when the bot is mentioned, for example `@your_bot inspect this`, or when replying to one of the bot's messages. The bot mention is stripped before the prompt is sent to Codex.
